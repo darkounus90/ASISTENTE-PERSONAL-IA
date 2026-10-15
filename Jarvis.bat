@@ -12,6 +12,7 @@ set "JARVIS_AGENTE=orchestrator"
 set "VOICESTUDIO_VOZ="
 set "PEDRO_CEREBRO=nuevo"
 if exist "ajustes.cmd" call "ajustes.cmd"
+if /i "%~1"=="auto" goto auto
 
 :menu
 cls
@@ -31,6 +32,8 @@ echo       [6]  Apagar Pedro
 echo       [7]  Probar a Pedro (pruebas automaticas, no ejecuta nada real)
 echo       [8]  Instalar Node.js (para que Pedro maneje Comet)
 echo       [9]  Conectar Google (Gmail y Calendar)
+echo       [W]  Pedro por WhatsApp (te responde en tu chat contigo mismo)
+echo       [A]  Arrancar Pedro solo al prender el PC (activar/quitar)
 echo       [C]  Cambiar cerebro: %CEREBRO%
 echo       [0]  Salir
 echo.
@@ -48,6 +51,8 @@ if "%OP%"=="7" goto probar
 if "%OP%"=="8" goto node
 if "%OP%"=="9" goto google
 if /i "%OP%"=="C" goto cambiar
+if /i "%OP%"=="W" goto whatsapp
+if /i "%OP%"=="A" goto autoarranque
 if "%OP%"=="0" exit /b
 goto menu
 
@@ -73,7 +78,7 @@ exit /b
 curl.exe -s -m 2 %JARVIS_API%/health >nul 2>&1
 if errorlevel 1 goto arrancar
 rem Si cambie archivos de Pedro despues de que arranco el cerebro, lo reinicio solo
-powershell -NoProfile -Command "$m = Get-Item cerebro.iniciado -ErrorAction SilentlyContinue; if (-not $m) { exit 1 }; $n = Get-ChildItem -Path .\*, .\herramientas\*, .\cerebro\* -Include *.py,*.md,*.json,*.sh,*.ps1 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin @('recordatorios.json','historial.json','MEMORY.md') -and $_.LastWriteTime -gt $m.LastWriteTime }; if ($n) { exit 1 } else { exit 0 }" >nul 2>&1
+powershell -NoProfile -Command "$m = Get-Item cerebro.iniciado -ErrorAction SilentlyContinue; if (-not $m) { exit 1 }; $n = Get-ChildItem -Path .\*, .\herramientas\*, .\cerebro\* -Include *.py,*.md,*.json,*.sh,*.ps1 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin @('recordatorios.json','historial.json','MEMORY.md','avisos.json','rutinas.json','vigilancia.json','estado.json','posicion.json') -and $_.LastWriteTime -gt $m.LastWriteTime }; if ($n) { exit 1 } else { exit 0 }" >nul 2>&1
 if not errorlevel 1 exit /b 0
 echo.
 echo     Hay cambios nuevos en Pedro: reiniciando el cerebro...
@@ -223,9 +228,38 @@ goto menu
 
 :apagar
 call :matar
+rem tambien el panel (HUD) y WhatsApp
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'hud\\hud\.py|pedro-whatsapp' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 echo.
 echo     Pedro apagado.
 timeout /t 2 >nul
+goto menu
+
+:auto
+rem Arranque automatico al prender el PC (acceso directo en Inicio con "Jarvis.bat auto")
+timeout /t 15 /nobreak >nul
+call :encender || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "voz\iniciar-voz.ps1"
+exit /b
+
+:whatsapp
+call :encender || goto menu
+start "Pedro - WhatsApp (no cerrar)" powershell -NoProfile -ExecutionPolicy Bypass -File "whatsapp\iniciar-whatsapp.ps1"
+echo.
+echo     Pedro por WhatsApp se abrio en otra ventana. La primera vez escanea el QR desde tu celular:
+echo     WhatsApp - Dispositivos vinculados - Vincular un dispositivo.
+timeout /t 4 >nul
+goto menu
+
+:autoarranque
+set "AA="
+if exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Pedro.lnk" set "AA=1"
+if defined AA (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "tools\instalar-autoarranque.ps1" -Quitar
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "tools\instalar-autoarranque.ps1"
+)
+pause
 goto menu
 
 :guardar

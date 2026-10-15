@@ -24,11 +24,17 @@ Uso (normalmente desde Jarvis.bat):
     uv run voz.py --microfonos  # lista micrófonos
     uv run voz.py --prueba      # medidor de micrófono y "Hey Jarvis"
     uv run voz.py --voces       # escuchar voces para elegir
+
+Atajo global (Windows): Ctrl+Alt+P (env JARVIS_ATAJO) = te escucho ya, sin decir "Pedro";
+si está hablando, se calla y escucha.
+Estado para el HUD: tmp/estado.json (en la carpeta de Pedro), se reescribe en cada cambio.
+Avisos proactivos: lee avisos.json (lo escribe el cerebro) y los dice cuando no está hablando.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import collections
 import json
 import os
@@ -70,12 +76,26 @@ INTERRUPCION = os.environ.get("JARVIS_INTERRUPCION", "1") != "0"      # callarse
 SENS_INTERRUPCION = float(os.environ.get("JARVIS_SENS_INTERRUPCION", "3.2"))  # más alto = menos sensible
 BLOQUES_INTERRUPCION = 4   # ~0,3 s de voz sostenida para interrumpir
 RESUMEN_HORA = os.environ.get("JARVIS_RESUMEN_HORA", "07:00")   # "" para desactivar
-RECORDATORIOS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                             "recordatorios.json")
-PROMPT_RESUMEN = ("[voz] Dame mi resumen de la mañana: primero mi agenda de hoy (usa agenda) y luego "
-                  "los correos importantes no leídos de las últimas 24 horas (usa correos_recientes con "
-                  "consulta 'is:unread newer_than:1d -category:promotions -category:social'). Menciona "
-                  "solo lo que requiera mi atención. Máximo 5 frases, sin leer ids ni enlaces.")
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # Documentos\jarvis
+RECORDATORIOS = os.path.join(RAIZ, "recordatorios.json")
+AVISOS = os.path.join(RAIZ, "avisos.json")                            # avisos proactivos del cerebro
+AVISOS_HORAS = float(os.environ.get("JARVIS_AVISOS_HORAS", "12"))     # más viejos: se marcan sin leerlos
+ESTADO_ARCHIVO = os.path.join(RAIZ, "tmp", "estado.json")             # lo lee el HUD
+ATAJO = os.environ.get("JARVIS_ATAJO", "ctrl+alt+p")                  # "" o "no" para desactivarlo
+PROMPT_RESUMEN = (
+    "[voz] Dame mi resumen de la mañana, breve y para escuchar, en este orden: "
+    "1) mi agenda de hoy (agenda); "
+    "2) los correos importantes no leídos de las últimas 24 horas (correos_recientes con consulta "
+    "'is:unread newer_than:1d -category:promotions -category:social'), solo los que requieran mi atención; "
+    "3) el estado de mis proyectos en producción (estado_vigilancia, si la tienes): di solo si todo está "
+    "bien o qué está caído o con errores; "
+    "4) mis recordatorios de hoy (listar_recordatorios); "
+    "5) cambios sin subir en mis proyectos activos: en los proyectos de C:\\dev en los que trabajé en los "
+    "últimos días (máximo 5) mira git status de solo lectura (git -C <carpeta> status -sb) y dime cuáles "
+    "tienen cambios sin commit o commits sin push. "
+    "Si una herramienta no está disponible o falla, sáltate esa parte sin explicar el error. Si una parte "
+    "no tiene nada importante, dilo en pocas palabras o sáltala. Sin listas, ids ni enlaces; máximo 8 "
+    "frases en total.")
 SEGUIMIENTO = float(os.environ.get("JARVIS_SEGUIMIENTO", "10"))  # seg. para seguir hablando sin "Hey Jarvis"
 MIC = os.environ.get("JARVIS_MIC")                              # índice o nombre del micrófono
 
@@ -112,14 +132,15 @@ class _Tee:
         return getattr(self.consola, nombre)
 
 
-try:
-    _log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "registro.log"),
-                "a", encoding="utf-8")
-    _log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
-    sys.stdout = _Tee(sys.stdout, _log)
-    sys.stderr = _Tee(sys.stderr, _log)
-except Exception:  # noqa: BLE001
-    pass
+if __name__ == "__main__":   # solo al correrlo (importarlo en pruebas no toca el registro)
+    try:
+        _log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "registro.log"),
+                    "a", encoding="utf-8")
+        _log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+        sys.stdout = _Tee(sys.stdout, _log)
+        sys.stderr = _Tee(sys.stderr, _log)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def info(msg: str) -> None:
@@ -140,32 +161,228 @@ def _ahora_local():
     return datetime.now(_TZ)
 
 
+# ----------------------------------------------------------------- Estado (para el HUD)
+# tmp/estado.json: {"estado": ..., "usuario": último texto tuyo, "pedro": último texto de Pedro, "t": epoch}
+ESTADOS = ("escuchando", "oyendo", "pensando", "hablando", "dormido", "apagado")
+_ESTADO = {"estado": "apagado", "usuario": "", "pedro": "", "t": 0.0}
+_ESTADO_LOCK = threading.Lock()
+_ESTADO_ULTIMO = [0.0]        # cuándo se escribió por última vez
+_ESTADO_PENDIENTE = [False]   # texto parcial guardado en memoria pero aún no escrito (límite 5/s)
+_DORMIDO = [False]            # "Pedro, duérmete": solo despierta con su nombre (o el atajo)
+
+
+def _recortar(txt: str, n: int = 400) -> str:
+    txt = (txt or "").strip()
+    return txt if len(txt) <= n else "…" + txt[-(n - 1):]
+
+
+def _leer_json(ruta: str):
+    """Lee un JSON; None si no existe, está a medio escribir o está dañado."""
+    try:
+        with open(ruta, encoding="utf-8-sig") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _escribir_json(ruta: str, datos, indent: int | None = None) -> bool:
+    """Escritura atómica: temporal en la misma carpeta + os.replace. En Windows, os.replace
+    falla si otro proceso tiene el archivo abierto justo en ese instante: reintenta un poco."""
+    os.makedirs(os.path.dirname(ruta), exist_ok=True)
+    tmp = f"{ruta}.{os.getpid()}-{threading.get_ident()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False, indent=indent)
+    for intento in range(6):
+        try:
+            os.replace(tmp, ruta)
+            return True
+        except PermissionError:
+            time.sleep(0.03 * (intento + 1))
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return False
+
+
+def poner_estado(estado: str | None = None, usuario: str | None = None, pedro: str | None = None,
+                 forzar: bool = False) -> None:
+    """Actualiza tmp/estado.json. Los cambios de estado se escriben al instante; el texto parcial
+    de Pedro (streaming) máximo 5 veces por segundo (lo que quede pendiente sale en la próxima)."""
+    with _ESTADO_LOCK:
+        antes = dict(_ESTADO)
+        if estado is not None:
+            _ESTADO["estado"] = estado
+        if usuario is not None:
+            _ESTADO["usuario"] = _recortar(usuario)
+        if pedro is not None:
+            _ESTADO["pedro"] = _recortar(pedro)
+        cambio_estado = _ESTADO["estado"] != antes["estado"]
+        cambio_texto = _ESTADO["usuario"] != antes["usuario"] or _ESTADO["pedro"] != antes["pedro"]
+        if not (forzar or cambio_estado or cambio_texto or _ESTADO_PENDIENTE[0]):
+            return
+        ahora = time.time()
+        if not (forzar or cambio_estado) and ahora - _ESTADO_ULTIMO[0] < 0.2:
+            _ESTADO_PENDIENTE[0] = True
+            return
+        _ESTADO["t"] = ahora
+        _ESTADO_ULTIMO[0] = ahora
+        _ESTADO_PENDIENTE[0] = False
+        try:
+            _escribir_json(ESTADO_ARCHIVO, dict(_ESTADO))
+        except OSError:
+            pass
+
+
+def estado_reposo() -> None:
+    poner_estado("dormido" if _DORMIDO[0] else "escuchando")
+
+
+def _al_salir() -> None:
+    if _ESTADO["t"]:   # solo si esta instancia llegó a escribir estado
+        poner_estado("apagado", forzar=True)
+
+
+_MANEJADOR_CONSOLA: list = []
+
+
+def _avisar_cierre_consola() -> None:
+    """Windows: si cierran la ventana con la X, atexit no corre; esto deja 'apagado' igual."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        tipo = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+        def manejador(evento):
+            if evento in (2, 5, 6):   # cerrar ventana, cerrar sesión, apagar Windows
+                _al_salir()
+            return False              # que Windows/Python sigan con lo normal (Ctrl+C incluido)
+
+        f = tipo(manejador)
+        _MANEJADOR_CONSOLA.append(f)  # que no lo recoja el recolector de basura
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(f, True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ----------------------------------------------------------------- Avisos proactivos (avisos.json)
+# Lista de {"id", "texto" (ya redactado para voz), "cuando" (epoch), "prioridad": "alta"|"normal", "leido"}
+_AVISOS_DICHOS: set = set()   # ids ya dichos en esta sesión (por si otro proceso borra mi marca)
+
+
+def elegir_avisos(lista, dormido: bool, ahora: float, dichos: set,
+                  max_horas: float = AVISOS_HORAS) -> tuple[list, dict]:
+    """Decide qué avisos sin leer se dicen ya. Devuelve (para_decir, marcas {id: cambios}).
+    Dormido: solo los de prioridad alta (los normales esperan a que despierte)."""
+    para_decir, marcas, vistos = [], {}, set()
+    if not isinstance(lista, list):
+        return para_decir, marcas
+    for a in lista:
+        if not isinstance(a, dict) or a.get("leido") or a.get("id") in (None, ""):
+            continue
+        id_ = str(a["id"])
+        texto = str(a.get("texto") or "").strip()
+        if id_ in dichos or id_ in vistos or not texto:
+            marcas.setdefault(id_, {"leido": True})   # ya lo dije, repetido o vacío: solo marcarlo
+            continue
+        try:
+            cuando = float(a.get("cuando") or ahora)
+        except (TypeError, ValueError):
+            cuando = ahora
+        if cuando > ahora + 1:
+            continue                                  # es para más tarde
+        if max_horas and ahora - cuando > max_horas * 3600:
+            marcas[id_] = {"leido": True, "caducado": True}   # muy viejo: no lo digo
+            continue
+        alta = str(a.get("prioridad") or "normal").strip().lower() == "alta"
+        if dormido and not alta:
+            continue
+        vistos.add(id_)
+        para_decir.append({"id": id_, "texto": texto, "alta": alta, "cuando": cuando})
+        marcas[id_] = {"leido": True}
+    para_decir.sort(key=lambda a: (not a["alta"], a["cuando"]))
+    return para_decir, marcas
+
+
+def fusionar_avisos(actual, marcas: dict) -> list:
+    """Aplica las marcas sobre la versión MÁS RECIENTE del archivo, por id: no borra, no
+    reordena y conserva los avisos que el cerebro agregó mientras tanto."""
+    salida = []
+    for a in actual if isinstance(actual, list) else []:
+        if isinstance(a, dict) and a.get("id") not in (None, "") and str(a["id"]) in marcas:
+            a = {**a, **marcas[str(a["id"])]}
+        salida.append(a)
+    return salida
+
+
+def revisar_avisos() -> None:
+    if not os.path.exists(AVISOS):
+        return
+    lista = _leer_json(AVISOS)
+    if lista is None:
+        return   # se está escribiendo o está dañado: lo intento en 5 s
+    para_decir, marcas = elegir_avisos(lista, _DORMIDO[0], time.time(), _AVISOS_DICHOS)
+    for a in para_decir:
+        _AVISOS_DICHOS.add(a["id"])
+        eventos.put(("aviso", a["texto"], a["alta"]))
+    if not marcas:
+        return
+    for _ in range(3):   # releo justo antes de escribir: el cerebro pudo agregar avisos
+        fresca = _leer_json(AVISOS)
+        if isinstance(fresca, list):
+            nueva = fusionar_avisos(fresca, marcas)
+            if nueva != fresca:
+                _escribir_json(AVISOS, nueva, indent=2)
+            return
+        time.sleep(0.1)
+    # no pude releerlo: no escribo nada (no quiero pisar avisos nuevos); _AVISOS_DICHOS evita repetirlos
+
+
+def _revisar_recordatorios() -> None:
+    if not os.path.exists(RECORDATORIOS):
+        return
+    with open(RECORDATORIOS, encoding="utf-8") as f:
+        lista = json.load(f)
+    vencidos = [r for r in lista if not r.get("hecho") and r.get("cuando", 0) <= time.time()]
+    if vencidos:
+        for r in vencidos:
+            r["hecho"] = True
+            eventos.put(("recordatorio", r.get("texto", "")))
+        tmp = RECORDATORIOS + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(lista, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, RECORDATORIOS)
+
+
+def _revisar_resumen(marca: str) -> None:
+    if RESUMEN_HORA and AGENTE != "simple":
+        ahora = _ahora_local()
+        hoy = ahora.strftime("%Y-%m-%d")
+        ultimo = open(marca).read().strip() if os.path.exists(marca) else ""
+        if ultimo != hoy and RESUMEN_HORA <= ahora.strftime("%H:%M") < "12:00":
+            open(marca, "w").write(hoy)
+            eventos.put(("resumen", ""))
+
+
+def _latido() -> None:
+    """Refresca "t" cada ~10 s (si el HUD ve un "t" viejo, la voz se cayó) y escribe texto pendiente."""
+    if _ESTADO["t"]:
+        poner_estado(forzar=time.time() - _ESTADO_ULTIMO[0] > 10)
+
+
 def vigia() -> None:
-    """Cada 5 s: recordatorios vencidos y resumen de la mañana (una vez al día)."""
+    """Cada 5 s: recordatorios vencidos, avisos del cerebro, resumen de la mañana (una vez al día)
+    y latido del estado. Un fallo en una parte no detiene las demás."""
     marca = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ultimo_resumen.txt")
     while True:
-        try:
-            if os.path.exists(RECORDATORIOS):
-                with open(RECORDATORIOS, encoding="utf-8") as f:
-                    lista = json.load(f)
-                vencidos = [r for r in lista if not r.get("hecho") and r.get("cuando", 0) <= time.time()]
-                if vencidos:
-                    for r in vencidos:
-                        r["hecho"] = True
-                        eventos.put(("recordatorio", r.get("texto", "")))
-                    tmp = RECORDATORIOS + ".tmp"
-                    with open(tmp, "w", encoding="utf-8") as f:
-                        json.dump(lista, f, ensure_ascii=False, indent=2)
-                    os.replace(tmp, RECORDATORIOS)
-            if RESUMEN_HORA and AGENTE != "simple":
-                ahora = _ahora_local()
-                hoy = ahora.strftime("%Y-%m-%d")
-                ultimo = open(marca).read().strip() if os.path.exists(marca) else ""
-                if ultimo != hoy and RESUMEN_HORA <= ahora.strftime("%H:%M") < "12:00":
-                    open(marca, "w").write(hoy)
-                    eventos.put(("resumen", ""))
-        except Exception as e:  # noqa: BLE001
-            print(f"  (vigía: {e.__class__.__name__}: {e})", flush=True)
+        for tarea in (_revisar_recordatorios, revisar_avisos, lambda: _revisar_resumen(marca), _latido):
+            try:
+                tarea()
+            except Exception as e:  # noqa: BLE001
+                print(f"  (vigía: {e.__class__.__name__}: {e})", flush=True)
         time.sleep(5)
 
 
@@ -202,17 +419,23 @@ def grabar_frase(espera_max: float, previo: list | None = None) -> np.ndarray | 
     `previo`: audio ya capturado (cuando interrumpiste a Pedro) para no perder tu inicio."""
     partes: list[np.ndarray] = list(previo or [])
     hablo = bool(previo)
+    if hablo and not _DORMIDO[0]:
+        poner_estado("oyendo")
     inicio = time.time()
     ultimo_sonido = time.time()
     limite = umbral_voz()
     while True:
         bloque = cola.get()
+        if _ATAJO.is_set():
+            return None       # pulsaste el atajo: el bucle principal te escucha desde cero
         nivel = rms(bloque)
         ahora = time.time()
         if nivel > (limite * 0.55 if hablo else limite):   # ya hablando: oído más fino
             if not hablo:
                 hablo = True
                 inicio = ahora
+                if not _DORMIDO[0]:
+                    poner_estado("oyendo")
             ultimo_sonido = ahora
         if hablo:
             partes.append(bloque)
@@ -471,11 +694,14 @@ def sintetizar(texto: str, voz: str | None = None) -> np.ndarray:
 
 def decir(texto: str) -> None:
     """Frase corta fija (avisos). Bloquea hasta terminar."""
+    poner_estado("hablando", pedro=texto)
     try:
         rep.agregar(sintetizar(texto))
         rep.esperar()
     except Exception as e:  # noqa: BLE001
         info(f"⚠️  No pude generar la voz ({e.__class__.__name__}). ¿Hay internet?")
+    finally:
+        estado_reposo()
 
 
 # ----------------------------------------------------------------- Partir en frases
@@ -584,6 +810,7 @@ def responder(texto: str, wake) -> list | None:
         contenido = contenido.replace("[voz]", "[voz] (te interrumpí mientras hablabas)", 1)
         _INTERRUMPIDA[0] = False
     historial.append({"role": "user", "content": contenido})
+    poner_estado("pensando", pedro="")
     cancelar = threading.Event()
     frases_q: "queue.Queue[str | None]" = queue.Queue()
     completo: list[str] = []
@@ -600,6 +827,7 @@ def responder(texto: str, wake) -> list | None:
                     tiempos["primera_palabra"] = time.time() - t0
                 completo.append(trozo)
                 print(trozo, end="", flush=True)
+                poner_estado(pedro="".join(completo))   # para el HUD (máx. 5 escrituras/s)
                 buf += trozo
                 frases, buf = extraer_frases(buf, primera)
                 for f in frases:
@@ -631,6 +859,7 @@ def responder(texto: str, wake) -> list | None:
             if not cancelar.is_set():
                 if not primer_audio:
                     primer_audio.append(time.time() - t0)
+                    poner_estado("hablando")
                 rep.agregar(audio)
 
     print(f"  {NOMBRE}: ", end="", flush=True)
@@ -650,6 +879,12 @@ def responder(texto: str, wake) -> list | None:
     except ImportError:
         msvcrt = None
     while t_loc.is_alive() or rep.ocupado():
+        if _ATAJO.is_set():             # atajo de teclado: me callo y te escucho (turno lo limpia)
+            cancelar.set()
+            rep.callar()
+            interrumpido = True
+            previo = []
+            break
         if msvcrt is not None and msvcrt.kbhit():
             while msvcrt.kbhit():
                 msvcrt.getwch()
@@ -689,8 +924,10 @@ def responder(texto: str, wake) -> list | None:
              f"{tiempos.get('respuesta_completa', 0):.1f}s · voz 1a frase "
              f"{tiempos.get('voz_1a_frase', 0):.1f}s)")
     if interrumpido:
-        info("(me interrumpiste: te escucho)" if previo else "(interrumpido)")
+        info("(atajo: te escucho)" if previo == [] else
+             "(me interrumpiste: te escucho)" if previo else "(interrumpido)")
     respuesta = "".join(completo)
+    poner_estado(pedro=respuesta, forzar=True)
     if respuesta:
         historial.append({"role": "assistant", "content": respuesta})
         _INTERRUMPIDA[0] = interrumpido
@@ -701,8 +938,8 @@ def responder(texto: str, wake) -> list | None:
         info(f"⚠️  No pude hablar con Jarvis: {error[0]}")
         decir("No pude comunicarme con el servidor.")
     print("", flush=True)
-    if previo is None:
-        vaciar_cola()   # si me interrumpiste, NO borro lo que sigues diciendo
+    if not previo:
+        vaciar_cola()   # si me interrumpiste hablando, NO borro lo que sigues diciendo
     return previo
 
 
@@ -733,18 +970,136 @@ def buscar_nombre(texto: str) -> tuple[bool, str]:
     return True, texto[m.end():].strip()
 
 
+# ----------------------------------------------------------------- Atajo de teclado global (Windows)
+_ATAJO = threading.Event()      # se pulsó el atajo: escuchar ya (y callar a Pedro si está hablando)
+_ATAJO_ACTIVO = [False]
+_MODIFICADORES = {"ctrl": 0x2, "control": 0x2, "alt": 0x1, "shift": 0x4, "mayus": 0x4, "win": 0x8}
+_TECLAS_ATAJO = {"space": 0x20, "espacio": 0x20, "pause": 0x13, "pausa": 0x13, "insert": 0x2D,
+                 "home": 0x24, "inicio": 0x24, "end": 0x23, "fin": 0x23, "scrolllock": 0x91}
+
+
+def parsear_atajo(texto: str) -> tuple[int, int] | None:
+    """'ctrl+alt+p' -> (modificadores, tecla virtual) para RegisterHotKey. None = desactivado.
+    ValueError si no se entiende."""
+    t = re.sub(r"\s+", "", (texto or "").lower())
+    if t in ("", "0", "no", "off", "ninguno", "desactivado"):
+        return None
+    partes = t.split("+")
+    if any(not p for p in partes):
+        raise ValueError("formato: ctrl+alt+p")
+    *mods_txt, tecla = partes
+    mods = 0
+    for m in mods_txt:
+        if m not in _MODIFICADORES:
+            raise ValueError(f"modificador desconocido '{m}' (usa ctrl, alt, shift o win)")
+        mods |= _MODIFICADORES[m]
+    if len(tecla) == 1 and tecla.isascii() and tecla.isalnum():
+        vk = ord(tecla.upper())
+    elif re.fullmatch(r"f(?:[1-9]|1\d|2[0-4])", tecla):
+        vk = 0x70 + int(tecla[1:]) - 1
+    elif tecla in _TECLAS_ATAJO:
+        vk = _TECLAS_ATAJO[tecla]
+    else:
+        raise ValueError(f"tecla desconocida '{tecla}'")
+    if not mods and not 0x70 <= vk <= 0x87:
+        raise ValueError("una tecla normal necesita ctrl, alt, shift o win")
+    return mods, vk
+
+
+def _hilo_atajo(mods: int, vk: int, listo: threading.Event) -> None:
+    """RegisterHotKey + bucle de mensajes propio (el atajo pertenece a este hilo)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        user32.RegisterHotKey.restype = wintypes.BOOL
+        user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT,
+                                       wintypes.UINT]
+        user32.GetMessageW.restype = wintypes.BOOL
+        if not user32.RegisterHotKey(None, 1, mods | 0x4000, vk):   # 0x4000 = sin autorrepetición
+            err = ctypes.get_last_error()
+            motivo = "ya lo usa otro programa" if err == 1409 else f"error {err}"
+            info(f"⚠️  No pude registrar el atajo {ATAJO} ({motivo}). Sigo sin atajo; "
+                 "cámbialo con JARVIS_ATAJO.")
+            return
+        _ATAJO_ACTIVO[0] = True
+        listo.set()
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == 0x0312:   # WM_HOTKEY
+                _ATAJO.set()
+    except Exception as e:  # noqa: BLE001
+        info(f"⚠️  Atajo de teclado no disponible ({e.__class__.__name__}: {e}).")
+    finally:
+        listo.set()
+
+
+def iniciar_atajo() -> None:
+    try:
+        teclas = parsear_atajo(ATAJO)
+    except ValueError as e:
+        info(f"⚠️  JARVIS_ATAJO='{ATAJO}' no es válido ({e}). Sigo sin atajo.")
+        return
+    if teclas is None:
+        return
+    if sys.platform != "win32":
+        info("⚠️  El atajo de teclado solo funciona en Windows. Sigo sin atajo.")
+        return
+    listo = threading.Event()
+    threading.Thread(target=_hilo_atajo, args=(*teclas, listo), daemon=True, name="atajo").start()
+    listo.wait(3)
+    if _ATAJO_ACTIVO[0]:
+        info(f"Atajo: {ATAJO} para hablarme sin decir \"{NOMBRE}\" (si estoy hablando, me callo).")
+
+
+def esperar_enter() -> str:
+    """Modo --teclado: espera Enter, el atajo o un evento (recordatorio/aviso). Devuelve cuál."""
+    try:
+        import msvcrt
+    except ImportError:
+        input("  [Enter para hablar] ")
+        return "enter"
+    extra = f" · {ATAJO}" if _ATAJO_ACTIVO[0] else ""
+    print(f"  [Enter para hablar{extra}] ", end="", flush=True)
+    while True:
+        if _ATAJO.is_set():
+            print("", flush=True)
+            return "atajo"
+        if not eventos.empty():
+            print("", flush=True)
+            return "evento"
+        while msvcrt.kbhit():
+            if msvcrt.getwch() in "\r\n":
+                print("", flush=True)
+                return "enter"
+        vaciar_cola()   # el micrófono sigue llenando la cola mientras esperas
+        time.sleep(0.05)
+
+
 # ----------------------------------------------------------------- Bucle principal
 def procesar_eventos(wake) -> None:
+    """Recordatorios, avisos del cerebro y resumen: se dicen entre turnos, nunca a mitad de frase."""
     while not eventos.empty():
-        tipo, texto = eventos.get()
+        ev = eventos.get()
+        tipo, texto = ev[0], ev[1]
         if tipo == "recordatorio":
             info(f"⏰ Recordatorio: {texto}")
             beep(988, 0.15)
             decir(f"Andrés, te recuerdo: {texto}")
+        elif tipo == "aviso":
+            alta = len(ev) > 2 and bool(ev[2])
+            info(f"🔔 Aviso{' importante' if alta else ''}: {texto}")
+            beep(784, 0.12)
+            if alta:
+                beep(988, 0.12)
+            decir(texto[:600])   # el cerebro ya lo redactó para voz
         elif tipo == "resumen":
             info("☀️  Resumen de la mañana")
             decir("Buenos días, Andrés. Te doy el resumen de hoy.")
-            responder(PROMPT_RESUMEN, wake)
+            responder(PROMPT_RESUMEN, wake)   # si pulsas el atajo, _ATAJO queda activo y el bucle te escucha
+
 
 def turno(stt, wake, espera: float, texto_previo: str = "") -> bool:
     """Un turno de conversación. Devuelve True si hubo conversación.
@@ -752,11 +1107,17 @@ def turno(stt, wake, espera: float, texto_previo: str = "") -> bool:
     previo = None
     if texto_previo:
         print(f"\n  Tú: {texto_previo}", flush=True)
+        poner_estado("pensando", usuario=texto_previo)
         previo = responder(texto_previo, wake)
         if previo is None:
             return True
     while True:
-        info("🎙️  Te escucho..." if previo is None else "🎙️  Te escucho (me interrumpiste)...")
+        if previo == []:                # me callaste con el atajo: escucho desde cero
+            _ATAJO.clear()
+            beep()
+            espera = max(espera, 8)
+        info("🎙️  Te escucho..." if not previo else "🎙️  Te escucho (me interrumpiste)...")
+        estado_reposo()
         audio = grabar_frase(espera, previo)
         if audio is None:
             return False
@@ -766,6 +1127,7 @@ def turno(stt, wake, espera: float, texto_previo: str = "") -> bool:
             info("(no entendí nada)")
             return False
         print(f"\n  Tú: {texto}   (entendido en {time.time() - t0:.1f}s)", flush=True)
+        poner_estado("pensando", usuario=texto)
         if es_parar(texto):
             info("(ok, me detengo)")
             beep(440, 0.08)
@@ -876,14 +1238,28 @@ def main() -> None:
 
     with sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=CHUNK,
                         callback=_cb, device=dispositivo_mic()):
+        atexit.register(_al_salir)
+        _avisar_cierre_consola()
         decir(f"{NOMBRE} en línea.")
-        dormido = False
         threading.Thread(target=vigia, daemon=True).start()
+        iniciar_atajo()
         print("  Listo. Ctrl+C para salir · cualquier tecla lo calla mientras habla.\n", flush=True)
         while True:
             procesar_eventos(wake)
-            if args.teclado:
-                input("  [Enter para hablar] ")
+            estado_reposo()
+            if _ATAJO.is_set():
+                # Atajo de teclado: como si hubieras dicho "Pedro" (y si estaba en pausa, despierta)
+                _ATAJO.clear()
+                if _DORMIDO[0]:
+                    _DORMIDO[0] = False
+                    info("☀️  Despierto.")
+                info(f"⌨️  Atajo {ATAJO}")
+                vaciar_cola()
+                beep()
+                hubo = turno(stt, wake, espera=8)
+            elif args.teclado:
+                if esperar_enter() != "enter":
+                    continue    # atajo o evento: los atiende el inicio del bucle
                 vaciar_cola()
                 beep()
                 hubo = turno(stt, wake, espera=8)
@@ -897,17 +1273,17 @@ def main() -> None:
                     continue
                 dijo, resto = buscar_nombre(oido)
                 if not dijo:
-                    if not dormido:
+                    if not _DORMIDO[0]:
                         print(f"  (oí: {oido!r} — sin \"{NOMBRE}\", lo ignoro)", flush=True)
                     continue
-                if dormido:
+                if _DORMIDO[0]:
                     if _DESPERTAR.search(resto) or not resto:
-                        dormido = False
+                        _DORMIDO[0] = False
                         info("☀️  Despierto.")
                         decir("Aquí estoy.")
                     continue
                 if _DORMIR.search(resto):
-                    dormido = True
+                    _DORMIDO[0] = True
                     info(f"💤 En pausa. Di \"{NOMBRE}, despierta\" para volver.")
                     decir("Listo, quedo en pausa. Dime despierta cuando me necesites.")
                     continue
@@ -941,6 +1317,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        _al_salir()
         print("\n  Hasta luego.")
     except Exception:
         import traceback

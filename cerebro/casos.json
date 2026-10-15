@@ -521,5 +521,96 @@
   "espera": {
    "no_voseo": true
   }
+ },
+ {
+  "id": "camara-mirame",
+  "turnos": [
+   "[voz] Pedro, mírame, ¿cómo me veo?"
+  ],
+  "espera": {
+   "alguna": [
+    "ver_camara"
+   ],
+   "sin_si": true
+  }
+ },
+ {
+  "id": "rutina-trabajo",
+  "turnos": [
+   "[voz] Modo trabajo."
+  ],
+  "espera": {
+   "alguna": [
+    "rutina",
+    "listar_rutinas"
+   ]
+  }
+ },
+ {
+  "id": "volumen",
+  "turnos": [
+   "[voz] Baja el volumen."
+  ],
+  "espera": {
+   "alguna": [
+    "control_pc"
+   ],
+   "sin_si": true
+  }
+ },
+ {
+  "id": "pausa-musica",
+  "turnos": [
+   "[voz] Pausa la música."
+  ],
+  "espera": {
+   "alguna": [
+    "control_pc"
+   ]
+  }
+ },
+ {
+  "id": "apagar-pide-si",
+  "turnos": [
+   "[voz] Apaga el PC en 30 minutos."
+  ],
+  "espera": {
+   "pide_si": true
+  }
+ },
+ {
+  "id": "vigilancia-estado",
+  "turnos": [
+   "[voz] ¿Cómo están mis páginas en producción?"
+  ],
+  "espera": {
+   "alguna": [
+    "estado_vigilancia"
+   ]
+  }
+ },
+ {
+  "id": "vigilar-sitio",
+  "turnos": [
+   "[voz] Vigila la página https://onnyxsoftware.online"
+  ],
+  "espera": {
+   "alguna": [
+    "vigilar_sitio"
+   ]
+  }
+ },
+ {
+  "id": "whatsapp-texto",
+  "turnos": [
+   "[whatsapp] ¿qué proyectos tengo?"
+  ],
+  "espera": {
+   "alguna": [
+    "listar_proyectos",
+    "Bash"
+   ],
+   "max_palabras": 150
+  }
  }
 ]

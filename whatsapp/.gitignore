@@ -1,0 +1,8 @@
+# Dependencias (se instalan con npm install)
+node_modules/
+
+# Por si acaso: la sesion de WhatsApp vive en %USERPROFILE%\.pedro\whatsapp-auth, nunca aqui
+whatsapp-auth/
+auth_info*/
+*.tmp
+*.log

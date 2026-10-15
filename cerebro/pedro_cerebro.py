@@ -6,6 +6,8 @@
 #   "tzdata",
 #   "mss>=9",
 #   "pillow>=10",
+#   "opencv-python>=4.8",
+#   "faster-whisper>=1.0",
 # ]
 # ///
 """Cerebro de Pedro sobre el motor de Claude Code (Claude Agent SDK).
@@ -139,11 +141,19 @@ def servidores_mcp() -> dict:
                 b = _io.BytesIO()
                 Image.new("RGB", (64, 40), (30, 30, 200)).save(b, "JPEG")
                 return b.getvalue(), "pantalla de prueba (64x40)"
-            out["vision"] = crear_servidor(_falsa)
+
+            def _falsa_camara(camara=0):
+                return _falsa()[0], f"cámara de prueba {camara} (64x40)"
+            out["vision"] = crear_servidor(_falsa, camara_capturador=_falsa_camara)
         else:
             out["vision"] = crear_servidor()
     except Exception as e:  # noqa: BLE001
         info(f"visión no disponible: {e!r}")
+    try:   # vigilancia proactiva (sitios, deploys, CI, tareas de Claude Code) dentro del cerebro
+        import vigilancia
+        out["vigilancia"] = vigilancia.crear_servidor(vigilancia.configurar(JARVIS, DATOS, cargar_secretos, info))
+    except Exception as e:  # noqa: BLE001
+        info(f"vigilancia no disponible: {e!r}")
     if MCP_MODO != "local" and shutil.which("npx"):
         out["comet-control"] = {"type": "stdio", "command": "cmd.exe",
                                 "args": ["/c", "npx", "-y", "@playwright/mcp@latest",
@@ -544,15 +554,63 @@ def crear_app():
             except Exception as e:  # noqa: BLE001
                 info(f"no pude preparar la sesión al arrancar: {e!r}")
         asyncio.create_task(calentar())
+        try:
+            import vigilancia
+            vigilancia.configurar(JARVIS, DATOS, cargar_secretos, info).iniciar()
+        except Exception as e:  # noqa: BLE001
+            info(f"no pude iniciar la vigilancia: {e!r}")
 
     async def al_cerrar(app):  # noqa: ARG001
+        try:
+            import vigilancia
+            await vigilancia.detener()
+        except Exception:  # noqa: BLE001
+            pass
         for c in cerebros.values():
             await c._desconectar()
 
-    app = web.Application(client_max_size=4 * 1024 * 1024)
+    stt = {"modelo": None}
+    stt_lock = asyncio.Lock()
+
+    def _transcribir_bytes(datos: bytes, sufijo: str) -> str:
+        import tempfile
+        if stt["modelo"] is None:
+            from faster_whisper import WhisperModel
+            stt["modelo"] = WhisperModel(os.environ.get("JARVIS_STT", "small"), device="cpu", compute_type="int8")
+        with tempfile.NamedTemporaryFile(suffix=sufijo, delete=False) as f:
+            f.write(datos)
+            ruta = f.name
+        try:
+            partes, _ = stt["modelo"].transcribe(ruta, language="es", vad_filter=True,
+                                                 initial_prompt="Pedro, Claude Code, Onnyx, CHECK, 18 Kilates.")
+            return " ".join(p.text.strip() for p in partes).strip()
+        finally:
+            try:
+                os.remove(ruta)
+            except OSError:
+                pass
+
+    async def transcribir(req):
+        """Notas de voz de WhatsApp: audio crudo -> {"texto": "..."}. Solo transcribe."""
+        datos = await req.read()
+        if not datos:
+            return web.json_response({"error": {"message": "audio vacío"}}, status=400)
+        tipo = (req.headers.get("Content-Type") or "").lower()
+        sufijo = ".ogg" if "ogg" in tipo or "opus" in tipo else ".mp3" if "mpeg" in tipo else ".m4a" if "mp4" in tipo else ".bin"
+        try:
+            async with stt_lock:
+                texto = await asyncio.to_thread(_transcribir_bytes, datos, sufijo)
+        except Exception as e:  # noqa: BLE001
+            info(f"no pude transcribir la nota de voz: {e!r}")
+            return web.json_response({"error": {"message": f"no pude transcribir: {e.__class__.__name__}"}}, status=500)
+        info(f"nota de voz transcrita ({len(datos) // 1024} KB): {texto[:80]!r}")
+        return web.json_response({"texto": texto}, dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+    app = web.Application(client_max_size=8 * 1024 * 1024)
     app.router.add_get("/health", salud)
     app.router.add_get("/pedro/traza", traza)
     app.router.add_post("/v1/chat/completions", chat)
+    app.router.add_post("/pedro/transcribir", transcribir)
     app.on_startup.append(al_iniciar)
     app.on_cleanup.append(al_cerrar)
     return app

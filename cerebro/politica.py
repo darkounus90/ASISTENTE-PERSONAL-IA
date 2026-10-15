@@ -94,7 +94,7 @@ def _bash_seguro(cmd: str) -> bool:
 _LECTURA = {
     "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "BashOutput", "TodoWrite",
     "listar_proyectos", "listar_archivos", "leer_archivo", "buscar_en_proyecto", "listar_terminales",
-    "leer_terminal", "ver_pantalla", "listar_recordatorios", "correos_recientes", "leer_correo", "agenda",
+    "leer_terminal", "ver_pantalla", "listar_recordatorios", "listar_rutinas", "estado_vigilancia", "correos_recientes", "leer_correo", "agenda",
     "estado_tareas", "resultado_tarea", "buscar_notas", "leer_nota", "vecinos", "notas_recientes",
     "browser_snapshot", "browser_take_screenshot", "browser_wait_for", "browser_tabs",
     "browser_console_messages", "browser_network_requests",
@@ -102,10 +102,13 @@ _LECTURA = {
 _LIBRE_MCP = _LECTURA | {
     "abrir_proyecto", "abrir_app", "abrir_claude_code", "abrir_terminal", "crear_recordatorio",
     "borrar_recordatorio", "cancelar_tarea", "crear_nota", "agregar_a_nota", "abrir_en_comet",
-    "abrir_comet_pedro", "browser_navigate", "browser_navigate_back", "browser_hover",
+    "abrir_comet_pedro", "abrir_url", "rutina", "vigilar_sitio", "browser_navigate", "browser_navigate_back", "browser_hover",
     "browser_press_key", "browser_resize", "browser_close",
 }
-_CONFIRMAR_MCP = {"crear_evento", "lanzar_claude_code"}
+_CONFIRMAR_MCP = {"crear_evento", "lanzar_claude_code", "dejar_de_vigilar"}
+# La cámara solo se enciende sola si Andres, en ESTE mensaje, pide que lo mire o le muestra algo.
+_PIDE_CAMARA = re.compile(r"\b(m[ií]rame|mira(me)?\b|c[aá]mara|webcam|foto|ves|muestro|ense[ñn]o|tengo en la mano|"
+                          r"c[oó]mo me veo|c[oó]mo estoy|esto|aqu[ií])", re.I)
 _BROWSER_ACCION = {"browser_click", "browser_type", "browser_fill_form", "browser_select_option",
                    "browser_file_upload", "browser_evaluate", "browser_drag", "browser_handle_dialog"}
 _WEB_RIESGO = re.compile(
@@ -150,7 +153,7 @@ def _norm_ruta(ruta: str) -> str:
     return r.rstrip(" .\\")                                            # Windows ignora espacios/puntos finales
 
 
-def clasificar(herramienta: str, entrada: dict) -> tuple[str, str]:
+def clasificar(herramienta: str, entrada: dict, texto_turno: str = "") -> tuple[str, str]:
     """Devuelve (categoría, motivo)."""
     nombre = _base(herramienta)
     entrada = entrada or {}
@@ -192,9 +195,18 @@ def clasificar(herramienta: str, entrada: dict) -> tuple[str, str]:
         if nombre in ("browser_evaluate", "browser_file_upload") or _WEB_RIESGO.search(json.dumps(entrada, ensure_ascii=False)):
             return CONFIRMAR, "una acción en la web que envía, compra, publica o borra"
         return LIBRE, ""
+    if nombre == "control_pc":
+        if str(entrada.get("accion", "")).lower() in ("apagar_en", "apagar", "reiniciar"):
+            return CONFIRMAR, f"programar el apagado del PC ({entrada.get('valor', '?')} minutos)"
+        return LIBRE, ""
+    if nombre == "ver_camara":
+        if _PIDE_CAMARA.search(texto_turno or ""):
+            return LIBRE, ""
+        return CONFIRMAR, "encender la cámara y tomar una foto"
     if nombre in _CONFIRMAR_MCP:
         return CONFIRMAR, {"crear_evento": "crear un evento en el calendario",
-                           "lanzar_claude_code": "poner a Claude Code a cambiar código en segundo plano"}[nombre]
+                           "lanzar_claude_code": "poner a Claude Code a cambiar código en segundo plano",
+                           "dejar_de_vigilar": "dejar de vigilar un sitio"}[nombre]
     if nombre in _LIBRE_MCP:
         return LIBRE, ""
     if nombre in ("ExitPlanMode", "KillShell", "KillBash"):
@@ -208,7 +220,7 @@ def es_lectura(herramienta: str, entrada: dict) -> bool:
         cmd = str((entrada or {}).get("command", ""))
         return _bash_seguro(cmd) and not re.search(r"\b(install|ci|i|build|test|tests|lint|audit|fetch|tsc|"
                                                    r"vitest|jest|generate|check|typecheck)\b", cmd, re.I)
-    return nombre in _LECTURA
+    return nombre in _LECTURA or (nombre == "ver_camara")
 
 
 def _clave(herramienta: str, entrada: dict) -> str:
@@ -228,17 +240,19 @@ class Politica:
     pendientes: Counter = field(default_factory=Counter)
     aprobados: Counter = field(default_factory=Counter)
     traza: list = field(default_factory=list)
+    texto: str = ""
 
     def nuevo_turno(self, texto: str, prueba: bool = False) -> None:
         """Un "sí" claro de Andres aprueba UNA vez cada acción que quedó pendiente en el turno anterior."""
         self.aprobados = Counter(self.pendientes) if es_afirmativo(texto) else Counter()
         self.pendientes = Counter()
         self.prueba = prueba
+        self.texto = texto or ""
         self.traza = []
 
     def decidir(self, herramienta: str, entrada: dict) -> tuple[bool, str]:
         """(permitido, mensaje para el modelo si se bloquea)."""
-        cat, motivo = clasificar(herramienta, entrada)
+        cat, motivo = clasificar(herramienta, entrada, self.texto)
         nombre = _base(herramienta)
         resumen = json.dumps(entrada, ensure_ascii=False)[:200]
         if cat == PROHIBIDO:
@@ -334,6 +348,13 @@ if __name__ == "__main__":
         ("mcp__comet-control__browser_click", {"element": "enlace Servicios"}, LIBRE),
         ("mcp__grafo__crear_nota", {"titulo": "x"}, LIBRE), ("mcp__vision__ver_pantalla", {}, LIBRE),
         ("mcp__otro__algo_raro", {}, CONFIRMAR),
+        ("mcp__pc__control_pc", {"accion": "volumen", "valor": 30}, LIBRE),
+        ("mcp__pc__control_pc", {"accion": "apagar_en", "valor": 10}, CONFIRMAR),
+        ("mcp__pc__rutina", {"nombre": "trabajo"}, LIBRE), ("mcp__pc__listar_rutinas", {}, LIBRE),
+        ("mcp__pc__abrir_url", {"url": "https://x.com"}, LIBRE),
+        ("mcp__vigilancia__estado_vigilancia", {}, LIBRE), ("mcp__vigilancia__vigilar_sitio", {}, LIBRE),
+        ("mcp__vigilancia__dejar_de_vigilar", {"nombre": "x"}, CONFIRMAR),
+        ("mcp__vision__ver_camara", {}, CONFIRMAR),   # sin pedirlo en el mensaje
     ]
     mal = 0
     for h, e, esperado in casos:
@@ -367,4 +388,7 @@ if __name__ == "__main__":
     assert p.decidir("Read", {"file_path": "a.ts"})[0] is True
     assert p.decidir("mcp__pc__abrir_terminal", {"proyecto": "x"})[0] is False   # simulado
     assert p.decidir("Bash", {"command": "git status"})[0] is True             # lectura real en prueba
+    assert clasificar("mcp__vision__ver_camara", {}, "[voz] Pedro, mírame")[0] == LIBRE
+    assert clasificar("mcp__vision__ver_camara", {}, "[voz] ¿qué tengo en la mano?")[0] == LIBRE
+    assert clasificar("mcp__vision__ver_camara", {}, "[voz] ¿qué hora es?")[0] == CONFIRMAR
     print("politica: OK" if not mal else f"politica: {mal} fallas")

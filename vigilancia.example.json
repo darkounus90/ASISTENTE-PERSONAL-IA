@@ -1,0 +1,9 @@
+{
+  "intervalo_min": 5,
+  "sitios": [
+    {"nombre": "18 Kilates", "url": "https://www.ejemplo-18kilates.com"}
+  ],
+  "vercel": {"proyectos": ["*"]},
+  "github": {"repos": ["darkounus90/x"]},
+  "railway": {"proyectos": []}
+}

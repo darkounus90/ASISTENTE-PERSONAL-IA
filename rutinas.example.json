@@ -1,0 +1,30 @@
+{
+  "_comentario": "Copia este archivo como rutinas.json (en Documentos\\jarvis) y ajústalo. Cada rutina es una lista de pasos; cada paso es una acción permitida: abrir_proyecto (proyecto, en), abrir_app (app), abrir_terminal (proyecto, comando), abrir_claude_code (proyecto, instruccion), abrir_url (url https), control_pc (control: volumen, subir_volumen, bajar_volumen, silenciar, musica_pausa, musica_siguiente, musica_anterior, bloquear, pantalla_apagar; valor) y esperar (segundos, 1-15). Nunca comandos sueltos. 'silenciar' y 'musica_pausa' alternan (si la música no sonaba, empieza a sonar). Apagar el PC no se permite en rutinas.",
+  "trabajo": {
+    "descripcion": "Abre el proyecto en VS Code, una terminal, Claude Code y Spotify.",
+    "alias": ["a trabajar", "modo trabajo", "empezar el día"],
+    "pasos": [
+      {"accion": "abrir_proyecto", "proyecto": "check", "en": "vscode"},
+      {"accion": "abrir_terminal", "proyecto": "check", "comando": "git status"},
+      {"accion": "abrir_claude_code", "proyecto": "check"},
+      {"accion": "abrir_app", "app": "spotify"}
+    ]
+  },
+  "reunion": {
+    "descripcion": "Pausa la música y silencia el PC.",
+    "alias": ["reunión", "modo reunión", "llamada"],
+    "pasos": [
+      {"accion": "control_pc", "control": "musica_pausa"},
+      {"accion": "control_pc", "control": "silenciar"}
+    ]
+  },
+  "fin del dia": {
+    "descripcion": "Pausa la música y bloquea el PC.",
+    "alias": ["fin del día", "terminar el día", "me voy"],
+    "pasos": [
+      {"accion": "control_pc", "control": "musica_pausa"},
+      {"accion": "esperar", "segundos": 1},
+      {"accion": "control_pc", "control": "bloquear"}
+    ]
+  }
+}

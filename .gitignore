@@ -4,6 +4,10 @@ MEMORY.md
 apodos_proyectos.json
 ajustes.cmd
 recordatorios.json
+vigilancia.json
+avisos.json
+avisos.json.corrupto-*
+.*.json.*.tmp
 voz/historial.json
 
 # Registros, temporales y respaldos
@@ -22,3 +26,5 @@ __pycache__/
 secrets.env
 *.pem
 google_pedro.json
+rutinas.json
+hud/posicion.json

@@ -7,6 +7,9 @@ Herramientas:
   crear_recordatorio(texto, minutos|hora)  -> guarda un recordatorio
   listar_recordatorios()                   -> recordatorios pendientes
   borrar_recordatorio(id)                  -> elimina un recordatorio
+  control_pc(accion, valor)                -> volumen, música, bloquear, apagar en N min, apagar pantalla
+  abrir_url(url)                           -> abre una página https en el navegador predeterminado
+  rutina(nombre) / listar_rutinas()        -> pasos guardados en Documentos\\jarvis\\rutinas.json
 
 Recordatorios: archivo JSON (env PEDRO_RECORDATORIOS, por defecto
 /mnt/c/Users/PC/Documents/jarvis/recordatorios.json) con una lista de objetos:
@@ -314,8 +317,8 @@ _PELIGROSO = re.compile(
 _TECLAS = {"enter", "escape", "ctrl+c", "tab", "arriba", "abajo", "y", "n", "1", "2", "3"}
 
 
-def _powershell(args: list) -> str:
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", _PS1, *args],
+def _powershell(args: list, script: str = _PS1) -> str:
+    r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, *args],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd="/mnt/c",
                        timeout=30)
     salida = (r.stdout or "").strip()
@@ -561,6 +564,285 @@ def borrar_recordatorio(id: str) -> str:  # noqa: A002 (nombre del parámetro MC
     return f"Borré el recordatorio {id}."
 
 
+# ---------------------------------------------------------------- control del PC
+def _ps_junto(nombre: str) -> str:
+    """Ruta de Windows de un .ps1 que vive junto a este archivo (herramientas\\)."""
+    aqui = os.path.dirname(os.path.abspath(__file__))
+    partes = aqui.split("/")
+    if aqui.startswith("/mnt/") and len(partes) > 2 and len(partes[2]) == 1:
+        return _a_win(os.path.join(aqui, nombre))
+    return "C:\\Users\\PC\\Documents\\jarvis\\herramientas\\" + nombre
+
+
+_PS_SISTEMA = _ps_junto("sistema.ps1")
+_ACCIONES_PC = ("volumen", "subir_volumen", "bajar_volumen", "silenciar", "musica_pausa", "musica_siguiente",
+                "musica_anterior", "bloquear", "apagar_en", "cancelar_apagado", "pantalla_apagar")
+_ACCIONES_PS = {"volumen", "subir_volumen", "bajar_volumen", "silenciar", "musica_pausa", "musica_siguiente",
+                "musica_anterior", "pantalla_apagar"}   # las que hace sistema.ps1 (teclas multimedia)
+
+
+def _sin_tildes(s: str) -> str:
+    import unicodedata as _ud
+    return "".join(c for c in _ud.normalize("NFD", s or "") if _ud.category(c) != "Mn")
+
+
+def _clave_accion(accion) -> str:
+    return re.sub(r"[\s-]+", "_", _sin_tildes(str(accion or "")).strip().lower())
+
+
+def _numero(valor, minimo: int, maximo: int, defecto: int = None, que: str = "valor") -> int:
+    """Convierte lo que mande el modelo (50, 50.0, "50", "50%") a entero dentro de [minimo, maximo]."""
+    import math
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        if defecto is None:
+            raise ValueError(f"Indica '{que}' (un número entre {minimo} y {maximo}).")
+        return defecto
+    if isinstance(valor, str):
+        try:
+            valor = float(valor.strip().rstrip("%").strip().replace(",", "."))
+        except ValueError:
+            raise ValueError(f"'{que}' debe ser un número entre {minimo} y {maximo}.") from None
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not math.isfinite(valor):
+        raise ValueError(f"'{que}' debe ser un número entre {minimo} y {maximo}.")
+    n = int(round(valor))
+    if not minimo <= n <= maximo:
+        raise ValueError(f"'{que}' debe estar entre {minimo} y {maximo} (llegó {valor:g}).")
+    return n
+
+
+def _ejecutar(argv: list, timeout: int = 15) -> tuple:
+    """Corre un .exe de Windows (sin shell) y devuelve (código de salida, salida)."""
+    log(f"ejecutando {argv}")
+    r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd="/mnt/c", timeout=timeout)
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
+
+def control_pc(accion: str, valor=None) -> str:
+    """Volumen, música, bloqueo, apagado programado y pantalla. Nada de comandos arbitrarios."""
+    a = _clave_accion(accion)
+    if a not in _ACCIONES_PC:
+        raise ValueError(f"Acción no válida: '{accion}'. Opciones: {', '.join(_ACCIONES_PC)}.")
+    if a == "volumen":
+        n = _numero(valor, 0, 100, que="valor (porcentaje 0-100)")
+        _powershell(["-Accion", a, "-Valor", str(n)], script=_PS_SISTEMA)
+        return f"Puse el volumen en {n} % (aproximado: va de 2 en 2)."
+    if a in ("subir_volumen", "bajar_volumen"):
+        n = _numero(valor, 2, 100, defecto=10, que="valor (cuánto, en %)")
+        _powershell(["-Accion", a, "-Valor", str(n)], script=_PS_SISTEMA)
+        return f"{'Subí' if a == 'subir_volumen' else 'Bajé'} el volumen más o menos {n} %."
+    if a in _ACCIONES_PS:
+        _powershell(["-Accion", a], script=_PS_SISTEMA)
+        return {"silenciar": "Alterné el silencio (si ya estaba silenciado, volvió el sonido).",
+                "musica_pausa": "Pulsé reproducir/pausa (si no sonaba nada, puede que haya empezado a sonar).",
+                "musica_siguiente": "Pasé a la siguiente canción.",
+                "musica_anterior": "Volví a la canción anterior.",
+                "pantalla_apagar": "Apagué la pantalla (se enciende al mover el mouse o tocar una tecla)."}[a]
+    if a == "bloquear":
+        _lanzar(["rundll32.exe", "user32.dll,LockWorkStation"])
+        return "Bloqueé el PC."
+    if a == "apagar_en":
+        minutos = _numero(valor, 1, 1440, que="valor (minutos, 1-1440)")
+        codigo, salida = _ejecutar(["shutdown.exe", "/s", "/t", str(minutos * 60)])
+        if codigo == 1190:
+            raise RuntimeError("Ya hay un apagado programado. Cancélalo primero con accion='cancelar_apagado'.")
+        if codigo != 0:
+            raise RuntimeError(f"Windows no aceptó programar el apagado (código {codigo}). {salida[:200]}".strip())
+        hora = (datetime.now(ZONA) + timedelta(minutes=minutos)).strftime("%H:%M")
+        return (f"Listo: el PC se apaga en {minutos} minuto(s), a las {hora}. Se cancela con "
+                "control_pc(accion='cancelar_apagado').")
+    # cancelar_apagado
+    codigo, salida = _ejecutar(["shutdown.exe", "/a"])
+    if codigo == 1116:
+        return "No había ningún apagado programado."
+    if codigo != 0:
+        raise RuntimeError(f"No pude cancelar el apagado (código {codigo}). {salida[:200]}".strip())
+    return "Cancelé el apagado programado."
+
+
+# ---------------------------------------------------------------- abrir páginas
+_URL_OK = re.compile(r"^https://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?::\d{1,5})?"
+                     r"(?:[/?#][A-Za-z0-9\-._~/?#\[\]@!$&'()*+;=%:]*)?$")
+
+
+def abrir_url(url: str) -> str:
+    """Abre una dirección https en el navegador predeterminado (explorer.exe con argv, sin shell).
+    No acepta espacios, comillas ni comas (explorer.exe trata las comas como separadores)."""
+    u = (url or "").strip()
+    if not u:
+        raise ValueError("Indica la dirección web.")
+    if "://" not in u:
+        u = "https://" + u
+    if not u.lower().startswith("https://"):
+        raise ValueError("Solo abro direcciones https://.")
+    u = "https://" + u[8:]
+    if len(u) > 2000 or not _URL_OK.match(u):
+        raise ValueError("Esa dirección no es válida o trae caracteres que no abro (espacios, comillas, "
+                         "comas o similares).")
+    _lanzar(["explorer.exe", u])
+    return f"Abrí {u} en tu navegador."
+
+
+# ---------------------------------------------------------------- rutinas
+def _archivo_rutinas() -> str:
+    return os.environ.get("PEDRO_RUTINAS", "/mnt/c/Users/PC/Documents/jarvis/rutinas.json")
+
+
+# acción del paso -> (función de este archivo, argumentos permitidos). Lista blanca: nada de comandos.
+_PASOS_RUTINA = {
+    "abrir_proyecto": ("abrir_proyecto", ("proyecto", "en")),
+    "abrir_app": ("abrir_app", ("app",)),
+    "abrir_terminal": ("abrir_terminal", ("proyecto", "comando")),
+    "abrir_claude_code": ("abrir_claude_code", ("proyecto", "instruccion")),
+    "control_pc": ("control_pc", ("accion", "valor")),
+    "abrir_url": ("abrir_url", ("url",)),
+    "esperar": ("_esperar", ("segundos",)),
+}
+_MAX_PASOS = 15
+_MAX_ESPERA = 30
+_RELLENO = {"modo", "rutina", "la", "el", "mi", "de", "activa", "activar", "activame", "pon", "ponme", "poner",
+            "inicia", "iniciar", "empieza", "empezar", "arranca", "arrancar", "corre", "correr", "ejecuta",
+            "ejecutar", "haz", "hacer", "hazme"}
+
+
+def _esperar(segundos=1) -> str:
+    s = _numero(segundos, 1, 15, defecto=1, que="segundos")
+    time.sleep(s)
+    return ""
+
+
+def _cargar_rutinas() -> dict:
+    ruta = _archivo_rutinas()
+    try:
+        with open(ruta, encoding="utf-8-sig") as f:
+            datos = json.load(f)
+    except FileNotFoundError:
+        raise ValueError("Aún no hay rutinas: copia rutinas.example.json a rutinas.json en la carpeta "
+                         "de Pedro (Documentos\\jarvis) y ajústalo.") from None
+    except ValueError:
+        raise RuntimeError("El archivo rutinas.json está dañado (JSON inválido); revísalo.") from None
+    if not isinstance(datos, dict):
+        raise RuntimeError("El archivo rutinas.json debe ser un objeto {\"nombre\": {\"pasos\": [...]}}.")
+    rutinas = {}
+    for nombre, r in datos.items():
+        if str(nombre).startswith("_"):
+            continue   # comentarios
+        if isinstance(r, list):
+            r = {"pasos": r}
+        if isinstance(r, dict):
+            rutinas[str(nombre)] = r
+    return rutinas
+
+
+def _clave_rutina(s: str, quitar_relleno: bool = False) -> str:
+    palabras = re.sub(r"[^a-z0-9]+", " ", _sin_tildes(str(s or "")).lower()).split()
+    while quitar_relleno and len(palabras) > 1 and palabras[0] in _RELLENO:
+        palabras.pop(0)   # "modo trabajo" / "la rutina de fin del día" -> "trabajo" / "fin del dia"
+    return "".join(palabras)
+
+
+def _buscar_rutina(nombre: str, rutinas: dict) -> str:
+    """'modo trabajo' -> 'trabajo', 'Fin del día' -> 'fin del dia' (tildes, mayúsculas y relleno)."""
+    import difflib
+    completa, q = _clave_rutina(nombre), _clave_rutina(nombre, quitar_relleno=True)
+    if not q:
+        raise ValueError("Dime qué rutina quieres.")
+    claves: dict = {}
+    for n, r in rutinas.items():
+        claves.setdefault(_clave_rutina(n), n)
+        for alias in r.get("alias") or []:
+            if isinstance(alias, str):
+                claves.setdefault(_clave_rutina(alias), n)
+    claves.pop("", None)
+    disponibles = ", ".join(rutinas) or "ninguna"
+    for k in (completa, q):
+        if k in claves:
+            return claves[k]
+    parecidas = {n for c, n in claves.items() if len(c) >= 4 and len(q) >= 4 and (q in c or c in q)}
+    if not parecidas:
+        parecidas = {claves[c] for c in difflib.get_close_matches(q, list(claves), n=3, cutoff=0.75)}
+    if len(parecidas) == 1:
+        return parecidas.pop()
+    if parecidas:
+        raise ValueError(f"'{nombre}' se parece a varias rutinas: {', '.join(sorted(parecidas))}. ¿Cuál?")
+    raise ValueError(f"No encontré la rutina '{nombre}'. Tengo: {disponibles}.")
+
+
+def _validar_pasos(pasos) -> list:
+    """Revisa TODA la rutina antes de ejecutar nada. Devuelve [(acción, argumentos), ...]."""
+    if not isinstance(pasos, list) or not pasos:
+        raise ValueError("Esa rutina no tiene pasos.")
+    if len(pasos) > _MAX_PASOS:
+        raise ValueError(f"Esa rutina tiene demasiados pasos (máximo {_MAX_PASOS}).")
+    salida, espera = [], 0
+    for i, p in enumerate(pasos, 1):
+        if not isinstance(p, dict):
+            raise ValueError(f"Paso {i}: debe ser un objeto como {{\"accion\": \"abrir_app\", \"app\": \"spotify\"}}.")
+        accion = str(p.get("accion", "")).strip()
+        if accion not in _PASOS_RUTINA:
+            raise ValueError(f"Paso {i}: la acción '{accion}' no está permitida en rutinas. "
+                             f"Solo: {', '.join(_PASOS_RUTINA)}.")
+        args = {k: v for k, v in p.items() if k not in ("accion", "args", "nota") and not str(k).startswith("_")}
+        if isinstance(p.get("args"), dict):
+            args.update(p["args"])
+        if accion == "control_pc" and "control" in args:   # "accion" ya es el nombre del paso
+            args["accion"] = args.pop("control")
+        extra = sorted(set(args) - set(_PASOS_RUTINA[accion][1]))
+        if extra:
+            raise ValueError(f"Paso {i} ({accion}): argumentos no permitidos: {', '.join(extra)}.")
+        if any(not isinstance(v, (str, int, float)) or isinstance(v, bool) for v in args.values()):
+            raise ValueError(f"Paso {i} ({accion}): los argumentos deben ser texto o números.")
+        if accion == "control_pc":
+            c = _clave_accion(args.get("accion"))
+            if c == "apagar_en":
+                raise ValueError(f"Paso {i}: por seguridad, apagar el PC no va en rutinas; pídemelo directamente.")
+            if c not in _ACCIONES_PC:
+                raise ValueError(f"Paso {i}: control '{args.get('accion')}' no válido. Opciones: "
+                                 f"{', '.join(a for a in _ACCIONES_PC if a != 'apagar_en')}.")
+        if accion == "esperar":
+            espera += _numero(args.get("segundos"), 1, 15, defecto=1, que="segundos")
+            if espera > _MAX_ESPERA:
+                raise ValueError(f"La rutina espera demasiado en total (máximo {_MAX_ESPERA} s).")
+        salida.append((accion, args))
+    return salida
+
+
+def rutina(nombre: str) -> str:
+    rutinas = _cargar_rutinas()
+    real = _buscar_rutina(nombre, rutinas)
+    pasos = _validar_pasos(rutinas[real].get("pasos"))
+    hechos, fallos = [], []
+    for i, (accion, args) in enumerate(pasos, 1):
+        fn = globals()[_PASOS_RUTINA[accion][0]]
+        try:
+            res = fn(**args)
+            if res:
+                hechos.append(str(res).split(" Para decirle algo más")[0])
+        except Exception as e:  # noqa: BLE001  (un paso que falla no detiene los demás)
+            fallos.append(f"paso {i} ({accion}): {e}")
+        if i < len(pasos) and accion != "esperar":
+            time.sleep(0.4)   # deja que Windows abra una cosa antes de la siguiente
+    resumen = f"Rutina «{real}»: " + (" ".join(hechos) if hechos else "sin acciones completadas.")
+    if fallos:
+        resumen += f" Fallaron {len(fallos)} paso(s): " + "; ".join(fallos)
+    return resumen
+
+
+def listar_rutinas() -> str:
+    try:
+        rutinas = _cargar_rutinas()
+    except ValueError as e:
+        return str(e)
+    if not rutinas:
+        return "rutinas.json no tiene rutinas."
+    lineas = []
+    for n, r in rutinas.items():
+        pasos = r.get("pasos") if isinstance(r.get("pasos"), list) else []
+        desc = str(r.get("descripcion") or "").strip()
+        lineas.append(f"- {n}: {desc + ' ' if desc else ''}({len(pasos)} pasos)")
+    return "Rutinas:\n" + "\n".join(lineas)
+
+
 # ---------------------------------------------------------------- MCP
 def _obj(props: dict = None, req: list = None) -> dict:
     return {"type": "object", "properties": props or {}, **({"required": req} if req else {})}
@@ -658,6 +940,33 @@ HERRAMIENTAS = {
     "borrar_recordatorio": (borrar_recordatorio, {
         "description": "Borra un recordatorio por su id.",
         "inputSchema": _obj({"id": {"type": "string", "description": "Id del recordatorio"}}, ["id"])}),
+    "control_pc": (control_pc, {
+        "description": (
+            "Controla el PC de Andres: volumen, música, bloqueo, apagado programado y pantalla. Acciones: "
+            "'volumen' (valor = porcentaje 0-100, aproximado de 2 en 2), 'subir_volumen' / 'bajar_volumen' "
+            "(valor = cuánto en %, por defecto 10), 'silenciar' (alterna silencio/sonido), 'musica_pausa' "
+            "(reproducir/pausa, alterna), 'musica_siguiente', 'musica_anterior', 'bloquear' (bloquea la "
+            "sesión), 'apagar_en' (valor = minutos, 1-1440: apaga el PC en ese tiempo; confírmalo antes), "
+            "'cancelar_apagado', 'pantalla_apagar' (apaga el monitor; se enciende al mover el mouse)."),
+        "inputSchema": _obj({"accion": {"type": "string", "enum": list(_ACCIONES_PC)},
+                             "valor": {"type": "number",
+                                       "description": "Porcentaje (volumen) o minutos (apagar_en)"}},
+                            ["accion"])}),
+    "abrir_url": (abrir_url, {
+        "description": "Abre una página web (solo https) en el navegador predeterminado de Andres para que "
+                       "él la vea. No devuelve el contenido. Úsala para 'ábreme Vercel', 'abre el panel "
+                       "de Supabase'.",
+        "inputSchema": _obj({"url": {"type": "string", "description": "Dirección https, ej. https://vercel.com"}},
+                            ["url"])}),
+    "rutina": (rutina, {
+        "description": "Ejecuta una rutina guardada por Andres en rutinas.json (ej. 'trabajo', 'reunión', "
+                       "'fin del día'): una serie de pasos permitidos (abrir proyecto/app/terminal/Claude "
+                       "Code/página, volumen y música, bloquear). El nombre puede ser aproximado ('modo "
+                       "trabajo'). Si no sabes cuáles hay, usa listar_rutinas.",
+        "inputSchema": _obj({"nombre": {"type": "string", "description": "Nombre de la rutina"}}, ["nombre"])}),
+    "listar_rutinas": (listar_rutinas, {
+        "description": "Lista las rutinas que Andres tiene guardadas (nombre, descripción y número de pasos).",
+        "inputSchema": _obj()}),
 }
 
 

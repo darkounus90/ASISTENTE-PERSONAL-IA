@@ -11,6 +11,14 @@ Asistente personal tipo JARVIS para Windows: lo activas diciendo **"Pedro, …"*
 - **Grafo de Obsidian**: busca, lee y crea notas enlazadas.
 - **Recordatorios**, **Gmail y Calendar**, **navegador Comet** (abrir páginas y manejarlo con Playwright).
 - **Memoria**: recuerda lo que le cuentas en `MEMORY.md` y retoma la conversación.
+- **Proactivo (vigilancia)**: vigila tus sitios, deploys de Vercel/Railway, GitHub Actions y tareas de Claude Code, y te avisa por voz solo cuando algo cambia (`vigilancia.json`, tokens en `secrets.env`).
+- **Informe de la mañana**: agenda, correos importantes, estado de producción, recordatorios y cambios sin subir.
+- **Atajo global** `Ctrl+Alt+P`: te escucha sin decir "Pedro" (y lo calla si está hablando).
+- **Rutinas por voz** ("modo trabajo", "modo reunión", "fin del día") y **control del PC** (volumen, música, bloquear, apagar con tu sí).
+- **Panel tipo JARVIS** (HUD) en una esquina: estado, lo que entendió y lo que responde, y los avisos.
+- **Cámara**: "mírame", "¿qué tengo en la mano?" (solo se enciende si se lo pides en ese mensaje).
+- **WhatsApp**: te responde en tu chat "Mensajes para ti mismo", texto y notas de voz (`whatsapp/README.md`).
+- **Arranque automático** al prender el PC (menú → A).
 
 ## Seguridad (por código, no por prompt)
 `cerebro/politica.py` decide cada acción:
@@ -27,6 +35,10 @@ Lo que lee en webs, correos, terminales o la pantalla lo trata como datos, nunca
 | `cerebro/` | Servidor del cerebro (API compatible con OpenAI en `127.0.0.1:8787`), política de permisos, pruebas automáticas |
 | `voz/` | Cliente de voz (micrófono, Whisper, TTS, interrupciones, recordatorios) |
 | `herramientas/` | Servidores MCP: PC y terminales, visión, grafo, Google, Claude Code |
+| `hud/` | Panel tipo JARVIS (tkinter) |
+| `whatsapp/` | Pedro por WhatsApp (Baileys, solo tu chat contigo mismo) |
+| `tools/` | Arranque automático con Windows |
+| `rutinas.example.json`, `vigilancia.example.json` | Plantillas de rutinas y de vigilancia |
 | `SOUL.md` | Personalidad y principios de Pedro |
 | `*.example.*` | Plantillas de tu perfil, memoria y apodos de proyectos |
 | `cerebro.sh`, `herramientas.py`, `parches.py`, `2-instalar-jarvis.sh` | Cerebro anterior (OpenJarvis en WSL), se conserva como respaldo |
