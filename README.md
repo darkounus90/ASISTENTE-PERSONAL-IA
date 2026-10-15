@@ -7,7 +7,7 @@ Asistente personal tipo JARVIS para Windows: lo activas diciendo **"Pedro, …"*
 - **Proyectos**: lee y busca en tus carpetas de código, revisa git, abre proyectos en VS Code, levanta servidores (`npm run dev`) en terminales.
 - **Terminales**: las lista, **lee lo que muestran** y escribe en ellas.
 - **Claude Code**: lo abre en un proyecto con un pedido inicial o lo pone a trabajar en segundo plano.
-- **Visión**: captura la pantalla o una ventana y la ve ("¿qué error sale aquí?").
+- **Visión**: captura la pantalla o una ventana y la ve ("¿qué error sale aquí?"); la captura se hace en Python (sin scripts que el antivirus bloquee).
 - **Grafo de Obsidian**: busca, lee y crea notas enlazadas.
 - **Recordatorios**, **Gmail y Calendar**, **navegador Comet** (abrir páginas y manejarlo con Playwright).
 - **Memoria**: recuerda lo que le cuentas en `MEMORY.md` y retoma la conversación.

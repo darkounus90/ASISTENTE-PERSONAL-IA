@@ -591,15 +591,6 @@ HERRAMIENTAS = {
     "listar_terminales": (listar_terminales, {
         "description": "Lista las terminales abiertas en el PC de Andres (título y programa).",
         "inputSchema": {"type": "object", "properties": {}}}),
-    "ver_pantalla": (ver_pantalla, {
-        "description": "VISIÓN: toma una captura de la pantalla de Andres y la ves como imagen. Úsala para "
-                       "'mira mi pantalla', '¿qué ves?', '¿qué error sale aquí?', '¿cómo se ve la página?', o "
-                       "para revisar una ventana que no se puede leer como texto (VS Code, el navegador, una app). "
-                       "Sin argumentos = pantalla principal; 'ventana' = solo esa ventana (aunque esté tapada); "
-                       "todas=true = todos los monitores.",
-        "inputSchema": {"type": "object", "properties": {
-            "ventana": {"type": "string", "description": "Parte del título de la ventana (opcional)"},
-            "todas": {"type": "boolean", "description": "Capturar todos los monitores"}}}}),
     "leer_terminal": (leer_terminal, {
         "description": "Lee lo que muestra una terminal abierta (Windows Terminal o consola), identificada por "
                        "parte de su título: salida de comandos, errores, lo que respondió Claude Code. Úsala "

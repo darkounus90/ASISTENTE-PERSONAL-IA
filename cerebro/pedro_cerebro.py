@@ -4,6 +4,8 @@
 #   "claude-agent-sdk>=0.2.100",
 #   "aiohttp>=3.9",
 #   "tzdata",
+#   "mss>=9",
+#   "pillow>=10",
 # ]
 # ///
 """Cerebro de Pedro sobre el motor de Claude Code (Claude Agent SDK).
@@ -46,6 +48,7 @@ DEV = os.environ.get("PEDRO_DEV", r"C:\dev")
 GRAFO = os.environ.get("PEDRO_GRAFO", r"C:\dev_grafo")
 MCP_MODO = os.environ.get("PEDRO_MCP", "wsl")          # wsl | local (pruebas en Linux)
 DISTRO = os.environ.get("PEDRO_WSL_DISTRO", "Ubuntu")
+ESPERA_MAX = float(os.environ.get("PEDRO_ESPERA_MAX", "90"))   # seg. sin noticias del modelo
 SESION_HORAS = float(os.environ.get("JARVIS_HISTORIAL_HORAS", "8"))
 try:
     ZONA = ZoneInfo("America/Bogota")
@@ -125,6 +128,21 @@ def servidores_mcp() -> dict:
         else:
             out[nombre] = {"type": "stdio", "command": "wsl.exe",
                            "args": ["-d", DISTRO, "--", "bash", _a_wsl(JARVIS / "herramientas" / "mcp.sh"), rel]}
+    try:   # visión: captura en Python dentro del cerebro (sin scripts que el antivirus bloquee)
+        from vision import crear_servidor
+        if os.environ.get("PEDRO_VISION_FALSA"):
+            from PIL import Image
+            import io as _io
+
+            def _falsa(ventana="", todas=False):
+                b = _io.BytesIO()
+                Image.new("RGB", (64, 40), (30, 30, 200)).save(b, "JPEG")
+                return b.getvalue(), "pantalla de prueba (64x40)"
+            out["vision"] = crear_servidor(_falsa)
+        else:
+            out["vision"] = crear_servidor()
+    except Exception as e:  # noqa: BLE001
+        info(f"visión no disponible: {e!r}")
     if MCP_MODO != "local" and shutil.which("npx"):
         out["comet-control"] = {"type": "stdio", "command": "cmd.exe",
                                 "args": ["/c", "npx", "-y", "@playwright/mcp@latest",
@@ -321,7 +339,7 @@ class Cerebro:
     # --- turno --------------------------------------------------------
     async def turno(self, texto: str, nueva: bool, cola: asyncio.Queue) -> None:
         """Pone en `cola` trozos de texto y al final None. Se puede cancelar (interrupción)."""
-        from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, TextBlock, ToolUseBlock
+        from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, SystemMessage, TextBlock, ToolUseBlock
 
         async with self.lock:
             t0 = time.time()
@@ -335,7 +353,23 @@ class Cerebro:
                 emitido_en_mensaje = 0
                 hubo_texto = False
                 primera = None
-                async for msg in self.cliente.receive_response():
+                flujo = self.cliente.receive_response().__aiter__()
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(flujo.__anext__(), ESPERA_MAX)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        info(f"el modelo no respondió en {ESPERA_MAX:.0f}s: interrumpo")
+                        self.ultima["error"] = f"sin respuesta del modelo en {ESPERA_MAX:.0f}s"
+                        await cola.put(("\n" if hubo_texto else "") +
+                                       "El modelo se demoró demasiado y lo corté. Repítemelo, por favor.")
+                        await self._desconectar()   # mata el pedido colgado; el próximo turno retoma la sesión
+                        break
+                    if isinstance(msg, SystemMessage):
+                        if msg.subtype not in ("init",):
+                            info(f"  [sistema] {msg.subtype}: {json.dumps(msg.data, ensure_ascii=False, default=str)[:400]}")
+                        continue
                     if isinstance(msg, StreamEvent):
                         ev = msg.event or {}
                         if msg.parent_tool_use_id:
@@ -358,6 +392,7 @@ class Cerebro:
                             continue
                         if getattr(msg, "error", None):
                             self.ultima["error"] = str(msg.error)
+                            info(f"  [api] error del modelo: {msg.error}")
                         for b in msg.content:
                             if isinstance(b, ToolUseBlock):
                                 self.ultima["herramientas"].append({"nombre": b.name.split("__")[-1],
@@ -372,12 +407,14 @@ class Cerebro:
                     elif isinstance(msg, ResultMessage):
                         if msg.session_id:
                             self._guardar_sesion(msg.session_id)
+                        if msg.is_error:
+                            info(f"  [api] turno con error: {msg.subtype} {str(msg.result)[:300]}")
                         if msg.is_error and not hubo_texto:
                             detalle = msg.result or self.ultima.get("error") or msg.subtype
                             self.ultima["error"] = detalle
                             await cola.put(f"Tuve un problema con mi cerebro: {str(detalle)[:160]}")
                         self.ultima["costo_usd"] = msg.total_cost_usd
-                terminado = True
+                terminado = not str(self.ultima.get("error") or "").startswith("sin respuesta")
                 self.ultima["tiempos"] = {"primera_palabra": round(primera or 0, 2),
                                           "total": round(time.time() - t0, 2)}
                 info(f"{'[prueba] ' if self.prueba else ''}turno listo en {time.time() - t0:.1f}s "
@@ -393,7 +430,7 @@ class Cerebro:
                 await cola.put("Tuve un problema con mi cerebro; vuelve a decírmelo en un momento.")
             finally:
                 self.ultima["traza"] = list(self.pol.traza)
-                if not terminado and self.cliente is not None:
+                if not terminado and self.cliente is not None and not str(self.ultima.get("error") or "").startswith("sin respuesta"):
                     await self._interrumpir()
                 await cola.put(None)
 
