@@ -3,6 +3,7 @@
 # dependencies = [
 #   "claude-agent-sdk>=0.2.100",
 #   "aiohttp>=3.9",
+#   "tzdata",
 # ]
 # ///
 """Cerebro de Pedro sobre el motor de Claude Code (Claude Agent SDK).
@@ -46,7 +47,11 @@ GRAFO = os.environ.get("PEDRO_GRAFO", r"C:\dev_grafo")
 MCP_MODO = os.environ.get("PEDRO_MCP", "wsl")          # wsl | local (pruebas en Linux)
 DISTRO = os.environ.get("PEDRO_WSL_DISTRO", "Ubuntu")
 SESION_HORAS = float(os.environ.get("JARVIS_HISTORIAL_HORAS", "8"))
-ZONA = ZoneInfo("America/Bogota")
+try:
+    ZONA = ZoneInfo("America/Bogota")
+except Exception:  # noqa: BLE001  (Windows sin base de zonas horarias)
+    from datetime import timedelta, timezone
+    ZONA = timezone(timedelta(hours=-5), "America/Bogota")   # Colombia no tiene horario de verano
 LOG = AQUI / "cerebro.log"
 
 
