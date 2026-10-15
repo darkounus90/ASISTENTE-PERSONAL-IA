@@ -48,6 +48,7 @@ DEV = os.environ.get("PEDRO_DEV", r"C:\dev")
 GRAFO = os.environ.get("PEDRO_GRAFO", r"C:\dev_grafo")
 MCP_MODO = os.environ.get("PEDRO_MCP", "wsl")          # wsl | local (pruebas en Linux)
 DISTRO = os.environ.get("PEDRO_WSL_DISTRO", "Ubuntu")
+PENSAR = os.environ.get("PEDRO_PENSAR", "0") == "1"   # 1 = razonamiento extendido (más lento)
 ESPERA_MAX = float(os.environ.get("PEDRO_ESPERA_MAX", "90"))   # seg. sin noticias del modelo
 SESION_HORAS = float(os.environ.get("JARVIS_HISTORIAL_HORAS", "8"))
 try:
@@ -250,7 +251,8 @@ class Cerebro:
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": MODELO_RAPIDO,
             "ANTHROPIC_SMALL_FAST_MODEL": MODELO_RAPIDO,
             "BASH_DEFAULT_TIMEOUT_MS": "60000",
-            "MAX_MCP_OUTPUT_TOKENS": "60000",                 # capturas de pantalla
+            "MAX_MCP_OUTPUT_TOKENS": "60000",
+            **({} if PENSAR else {"MAX_THINKING_TOKENS": "0"}),                 # capturas de pantalla
             "PYTHONIOENCODING": "utf-8",
         }
         git = bash_de_git()
@@ -278,6 +280,8 @@ class Cerebro:
             env=env,
             stderr=lambda l: info(f"[claude] {l.rstrip()}") if l.strip() else None,
         )
+        if not PENSAR:
+            opciones["thinking"] = {"type": "disabled"}   # sin razonamiento extendido: responde mucho más rápido
         if ESFUERZO:
             opciones["effort"] = ESFUERZO
         if retomar:
@@ -353,6 +357,7 @@ class Cerebro:
                 emitido_en_mensaje = 0
                 hubo_texto = False
                 primera = None
+                t_consulta = 0.0
                 flujo = self.cliente.receive_response().__aiter__()
                 while True:
                     try:
@@ -367,6 +372,9 @@ class Cerebro:
                         await self._desconectar()   # mata el pedido colgado; el próximo turno retoma la sesión
                         break
                     if isinstance(msg, SystemMessage):
+                        if msg.subtype == "status" and (msg.data or {}).get("status") == "requesting":
+                            t_consulta = time.time()
+                            continue
                         if msg.subtype not in ("init",):
                             info(f"  [sistema] {msg.subtype}: {json.dumps(msg.data, ensure_ascii=False, default=str)[:400]}")
                         continue
@@ -375,6 +383,9 @@ class Cerebro:
                         if msg.parent_tool_use_id:
                             continue
                         if ev.get("type") == "message_start":
+                            if t_consulta:
+                                info(f"  [api] el modelo empezó a responder en {time.time() - t_consulta:.1f}s")
+                                t_consulta = 0.0
                             emitido_en_mensaje = 0
                             if hubo_texto:
                                 await cola.put("\n")
