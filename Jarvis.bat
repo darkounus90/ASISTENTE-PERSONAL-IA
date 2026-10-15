@@ -29,7 +29,7 @@ echo       [1]  Iniciar Pedro con voz  (di "Pedro, ...")
 echo       [2]  Iniciar Pedro con voz  (Enter para hablar)
 echo       [3]  Chat por texto
 echo       [4]  Elegir voz
-echo       [5]  Probar microfono
+echo       [5]  Microfono y parlante (elegir y probar)
 echo       [6]  Apagar Pedro
 echo       [7]  Probar a Pedro (pruebas automaticas, no ejecuta nada real)
 echo       [8]  Instalar Node.js (para que Pedro maneje Comet)
@@ -155,6 +155,7 @@ goto menu
 call :encender || goto menu
 rem Se guarda por NOMBRE en voz\microfono.txt: no importa si Windows cambia los numeros
 powershell -NoProfile -ExecutionPolicy Bypass -File "voz\iniciar-voz.ps1" --elegir-mic
+powershell -NoProfile -ExecutionPolicy Bypass -File "voz\iniciar-voz.ps1" --elegir-salida
 echo.
 echo     Ahora habla para ver el nivel del microfono. Ctrl+C para terminar (luego responde N).
 powershell -NoProfile -ExecutionPolicy Bypass -File "voz\iniciar-voz.ps1" --prueba

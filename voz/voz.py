@@ -277,6 +277,131 @@ class Microfono:
                 self.stream = None
 
 
+# ----------------------------------------------------------------- Parlante / salida (por NOMBRE)
+PARLANTE_ARCHIVO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parlante.txt")
+_SALIDA_ACTUAL = ["el parlante predeterminado"]
+_TIPOS_SALIDA = {
+    "tv": r"\btv\b|televis|hdmi|nvidia high def|display audio|amd high def|\blg\b|samsung|sony|hisense|tcl|philips|roku|chromecast",
+    "audifonos": r"headset|headphone|auricular|aud[ií]fono|hyperx|corsair|razer|airpods|buds|cascos|diadema|hands-free",
+    "parlantes": r"speaker|altavoc|parlante|bocina|realtek",
+}
+
+
+def _salidas() -> list:
+    apis = sd.query_hostapis()
+    return [(i, d["name"], apis[d["hostapi"]]["name"]) for i, d in enumerate(sd.query_devices())
+            if d["max_output_channels"] >= 1]
+
+
+def _sirve_salida(i) -> bool:
+    try:
+        sd.check_output_settings(device=i, samplerate=SR_TTS, channels=1, dtype="int16")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _buscar_salida(patron: str) -> tuple:
+    rx = re.compile(patron, re.I)
+    cands = [e for e in _salidas() if rx.search(e[1]) and "asignador" not in e[1].lower()
+             and "sound mapper" not in e[1].lower()]
+    cands.sort(key=lambda e: _ORDEN_API.get(e[2], 9))
+    for i, nombre, _api in cands:
+        if _sirve_salida(i):
+            return i, nombre
+    return None, ""
+
+
+def resolver_salida() -> tuple:
+    """(dispositivo o None, nombre, aviso) del parlante guardado en voz/parlante.txt (o JARVIS_PARLANTE)."""
+    pref = (os.environ.get("JARVIS_PARLANTE") or "").strip()
+    if not pref or pref.lower() in ("auto", "predeterminado", "default"):
+        try:
+            with open(PARLANTE_ARCHIVO, encoding="utf-8") as f:
+                pref = f.read().strip()
+        except OSError:
+            pref = ""
+    if pref:
+        i, nombre = _buscar_salida(re.escape(_norm_mic(pref)[:31]))
+        if i is not None:
+            return i, nombre, ""
+        aviso = f"No encontré la salida «{pref}» (¿apagada o desconectada?); uso el parlante predeterminado."
+    else:
+        aviso = ""
+    try:
+        nombre = sd.query_devices(kind="output")["name"]
+    except Exception:  # noqa: BLE001
+        nombre = "?"
+    return None, f"{nombre} (predeterminado de Windows)", aviso
+
+
+_CAMBIAR_SALIDA = re.compile(
+    r"\b(habla[rs]?|h[aá]blame|hables|vuelve|regresa|esc[uú]ch(ate|es|e)|suen[ae]s?|sal(ga|gas)?|ponte|pon|cambia(te)?|p[aá]sate|"
+    r"pasa|usa|conecta(te)?|reproduce|o[ií]rte|oigas?)\b"
+    r".{0,30}?\b(televisor|tele|tv|parlantes?|altavoces|bocinas|aud[ií]fonos|diadema|cascos|"
+    r"auriculares|headset|predeterminado|normal)\b", re.I)
+_PREGUNTA_SALIDA = re.compile(r"por\s+d[oó]nde\s+(est[aá]s\s+)?(hablando|sonando|sales)|qu[eé]\s+(parlante|salida)", re.I)
+
+
+def comando_salida(texto: str) -> str | None:
+    """Si el texto pide cambiar la salida de audio, la cambia y devuelve qué decir. Si no, None."""
+    m = _CAMBIAR_SALIDA.search(texto or "")
+    if not m:
+        return None
+    destino = m.group(m.lastindex).lower()
+    if destino in ("predeterminado", "normal"):
+        try:
+            os.remove(PARLANTE_ARCHIVO)
+        except OSError:
+            pass
+        rep.cambiar_salida(None)
+        _SALIDA_ACTUAL[0] = resolver_salida()[1]
+        return "Listo, vuelvo al parlante predeterminado."
+    tipo = ("tv" if re.match(r"tele|tv", destino) else
+            "audifonos" if re.match(r"aud|diadema|cascos|auric|headset", destino) else "parlantes")
+    i, nombre = _buscar_salida(_TIPOS_SALIDA[tipo])
+    if i is None:
+        que = {"tv": "un televisor", "audifonos": "unos audífonos", "parlantes": "unos parlantes"}[tipo]
+        extra = " ¿Está prendido y conectado por HDMI?" if tipo == "tv" else ""
+        return f"No encuentro {que} como salida de sonido.{extra}"
+    if not rep.cambiar_salida(i):
+        return f"Encontré {nombre}, pero Windows no me deja usarlo ahora."
+    with open(PARLANTE_ARCHIVO, "w", encoding="utf-8") as f:
+        f.write(nombre)
+    _SALIDA_ACTUAL[0] = nombre
+    info(f"🔊 Salida: {nombre}")
+    corto = re.sub(r"\s*\(.*$", "", nombre) or nombre
+    return f"Listo, ahora hablo por {corto}."
+
+
+def elegir_salida() -> None:
+    vistos, lista = set(), []
+    for i, nombre, api in sorted(_salidas(), key=lambda e: _ORDEN_API.get(e[2], 9)):
+        clave = _norm_mic(nombre)[:31]
+        if clave in vistos or "asignador" in clave or "sound mapper" in clave or not _sirve_salida(i):
+            continue
+        vistos.add(clave)
+        lista.append(nombre)
+    print("\n  Salidas de sonido (por dónde habla Pedro):\n")
+    print("   [0] Automático: el parlante predeterminado de Windows")
+    for n, nombre in enumerate(lista, 1):
+        print(f"   [{n}] {nombre}")
+    try:
+        r = input("\n  Número de la salida (Enter = no cambiar): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if r == "0":
+        try:
+            os.remove(PARLANTE_ARCHIVO)
+        except OSError:
+            pass
+        print("  Listo: usaré el parlante predeterminado.")
+    elif r.isdigit() and 1 <= int(r) <= len(lista):
+        with open(PARLANTE_ARCHIVO, "w", encoding="utf-8") as f:
+            f.write(lista[int(r) - 1])
+        print(f"  Listo: Pedro hablará por «{lista[int(r) - 1]}».")
+
+
 def elegir_mic() -> None:
     """Menú para elegir el micrófono; guarda su NOMBRE en voz/microfono.txt."""
     vistos, lista = set(), []
@@ -622,13 +747,39 @@ class Reproductor:
     """Un único stream de salida abierto todo el tiempo. Las frases se van
     encolando y suenan una tras otra sin cortes ni chasquidos."""
 
-    def __init__(self) -> None:
+    def __init__(self, dispositivo=None) -> None:
         self._buf: collections.deque[np.ndarray] = collections.deque()
         self._actual = np.zeros(0, dtype=np.int16)
         self._lock = threading.Lock()
-        self._stream = sd.OutputStream(samplerate=SR_TTS, channels=1, dtype="int16",
-                                       latency="high", blocksize=2048, callback=self._cb)
-        self._stream.start()
+        self.dispositivo = dispositivo
+        try:
+            self._stream = self._abrir(dispositivo)
+        except Exception as e:  # noqa: BLE001
+            info(f"⚠️  No pude abrir el parlante elegido ({e.__class__.__name__}); uso el predeterminado.")
+            self.dispositivo = None
+            self._stream = self._abrir(None)
+
+    def _abrir(self, dispositivo):
+        st = sd.OutputStream(samplerate=SR_TTS, channels=1, dtype="int16", latency="high",
+                             blocksize=2048, callback=self._cb, device=dispositivo)
+        st.start()
+        return st
+
+    def cambiar_salida(self, dispositivo) -> bool:
+        """Pasa la voz a otro parlante (TV, audífonos…) sin reiniciar."""
+        self.pausar_salida()
+        try:
+            self._stream = self._abrir(dispositivo)
+            self.dispositivo = dispositivo
+            return True
+        except Exception as e:  # noqa: BLE001
+            info(f"⚠️  No pude usar esa salida ({e.__class__.__name__}); vuelvo a la anterior.")
+            try:
+                self._stream = self._abrir(self.dispositivo)
+            except Exception:  # noqa: BLE001
+                self.dispositivo = None
+                self._stream = self._abrir(None)
+            return False
 
     def pausar_salida(self) -> None:
         try:
@@ -639,11 +790,16 @@ class Reproductor:
 
     def reanudar_salida(self) -> None:
         try:
-            self._stream = sd.OutputStream(samplerate=SR_TTS, channels=1, dtype="int16",
-                                           latency="high", blocksize=2048, callback=self._cb)
-            self._stream.start()
+            disp, _n, _a = resolver_salida()        # tras refrescar, los números pudieron cambiar
+            self._stream = self._abrir(disp)
+            self.dispositivo = disp
         except Exception as e:  # noqa: BLE001
             info(f"⚠️  No pude reabrir el parlante ({e.__class__.__name__}).")
+            try:
+                self._stream = self._abrir(None)
+                self.dispositivo = None
+            except Exception:  # noqa: BLE001
+                pass
 
     def _cb(self, outdata, frames, t, status):  # noqa: ARG002
         out = outdata[:, 0]
@@ -1382,6 +1538,7 @@ def main() -> None:
     ap.add_argument("--teclado", action="store_true", help="Enter para hablar, sin 'Hey Jarvis'")
     ap.add_argument("--microfonos", action="store_true", help="Lista micrófonos y sale")
     ap.add_argument("--elegir-mic", action="store_true", help="Elige el micrófono (se guarda por nombre)")
+    ap.add_argument("--elegir-salida", action="store_true", help="Elige el parlante/TV por donde habla")
     ap.add_argument("--voces", action="store_true", help="Escucha varias voces para elegir")
     ap.add_argument("--prueba", action="store_true", help="Medidor en vivo de micrófono y 'Hey Jarvis'")
     args = ap.parse_args()
@@ -1398,7 +1555,14 @@ def main() -> None:
         prueba_mic()
         return
 
-    rep = Reproductor()
+    if args.elegir_salida:
+        elegir_salida()
+        return
+    disp_salida, nombre_salida, aviso_salida = resolver_salida()
+    if aviso_salida:
+        info(f"⚠️  {aviso_salida}")
+    rep = Reproductor(disp_salida)
+    _SALIDA_ACTUAL[0] = nombre_salida
     if args.voces:
         probar_voces()
         return
@@ -1427,6 +1591,7 @@ def main() -> None:
         info(f"Voz: ElevenLabs ({ELEVEN_VOZ}, {ELEVEN_MODELO})")
     else:
         info(f"Voz: {VOZ}")
+    info(f"🔊 Salida: {_SALIDA_ACTUAL[0]}")
 
     mic = Microfono()
     mic.abrir()
@@ -1480,6 +1645,13 @@ def main() -> None:
                     _DORMIDO[0] = True
                     info(f"💤 En pausa. Di \"{NOMBRE}, despierta\" para volver.")
                     decir("Listo, quedo en pausa. Dime despierta cuando me necesites.")
+                    continue
+                respuesta_salida = comando_salida(resto)
+                if respuesta_salida:
+                    decir(respuesta_salida)
+                    continue
+                if _PREGUNTA_SALIDA.search(resto):
+                    decir(f"Estoy hablando por {_SALIDA_ACTUAL[0].replace('(predeterminado de Windows)', ', el predeterminado de Windows')}.")
                     continue
                 if _PREGUNTA_MIC.search(resto):
                     info(f"🎙️  Micrófono: {_MIC_ACTUAL[0]}")

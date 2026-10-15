@@ -202,6 +202,23 @@ def ajustes_claude() -> str:
     return str(ruta)
 
 
+def error_amigable(texto: str) -> str | None:
+    """Traduce errores de la API (nyxos) a una frase en español para decir en voz alta."""
+    t = (texto or "").lower()
+    if not re.search(r"api error|failed to authenticate|quota|insufficient|rate.?limit|overloaded|\b(401|402|403|429|5\d\d)\b", t):
+        return None
+    if re.search(r"quota|saldo|balance|insufficient|credit|pre-consume", t):
+        return ("Se me acabó el saldo en nyxos, así que no puedo pensar. Recárgalo en api punto nyxos punto shop "
+                "y sigo de una.")
+    if re.search(r"rate.?limit|\b429\b|too many", t):
+        return "Nyxos me está frenando por muchas peticiones seguidas. Dame un minuto y repítemelo."
+    if re.search(r"invalid|unauthori|\b401\b|authenticate|token", t):
+        return "Mi clave de nyxos no está funcionando. Revisa que siga activa en api punto nyxos punto shop."
+    if re.search(r"overloaded|\b5\d\d\b|timeout|unavailable", t):
+        return "Nyxos está fallando en este momento. Inténtalo de nuevo en un rato."
+    return "Nyxos me devolvió un error y no pude responder. Inténtalo de nuevo."
+
+
 def ahora_legible() -> str:
     dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
@@ -414,11 +431,24 @@ class Cerebro:
                         if getattr(msg, "error", None):
                             self.ultima["error"] = str(msg.error)
                             info(f"  [api] error del modelo: {msg.error}")
+                            crudo = " ".join(b.text for b in msg.content if isinstance(b, TextBlock))
+                            amigable = error_amigable(crudo + " " + str(msg.error)) or \
+                                "Tuve un problema con el modelo y no pude responder. Inténtalo de nuevo."
+                            info(f"  [api] {crudo[:300]}")
+                            if emitido_en_mensaje == 0:
+                                hubo_texto = True
+                                self.ultima["respuesta"] += amigable
+                                await cola.put(amigable)
+                            emitido_en_mensaje = 0
+                            continue
                         for b in msg.content:
                             if isinstance(b, ToolUseBlock):
                                 self.ultima["herramientas"].append({"nombre": b.name.split("__")[-1],
                                                                     "entrada": b.input})
                             elif isinstance(b, TextBlock) and emitido_en_mensaje == 0 and b.text:
+                                if b.text.lstrip().lower().startswith(("api error", "failed to authenticate")):
+                                    info(f"  [api] {b.text[:300]}")
+                                    b = TextBlock(text=error_amigable(b.text) or b.text)
                                 if hubo_texto:
                                     await cola.put("\n")
                                 hubo_texto = True
@@ -433,11 +463,14 @@ class Cerebro:
                         if msg.is_error and not hubo_texto:
                             detalle = msg.result or self.ultima.get("error") or msg.subtype
                             self.ultima["error"] = detalle
-                            await cola.put(f"Tuve un problema con mi cerebro: {str(detalle)[:160]}")
+                            await cola.put(error_amigable(str(detalle)) or
+                                           f"Tuve un problema con mi cerebro: {str(detalle)[:160]}")
                         self.ultima["costo_usd"] = msg.total_cost_usd
                 terminado = not str(self.ultima.get("error") or "").startswith("sin respuesta")
                 self.ultima["tiempos"] = {"primera_palabra": round(primera or 0, 2),
                                           "total": round(time.time() - t0, 2)}
+                if self.ultima.get("costo_usd"):
+                    info(f"  costo del turno: ${self.ultima['costo_usd']:.4f} USD")
                 info(f"{'[prueba] ' if self.prueba else ''}turno listo en {time.time() - t0:.1f}s "
                      f"(1a palabra {primera or 0:.1f}s) · herramientas: "
                      f"{', '.join(h['nombre'] for h in self.ultima['herramientas']) or 'ninguna'}")

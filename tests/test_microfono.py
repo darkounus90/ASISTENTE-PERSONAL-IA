@@ -96,3 +96,55 @@ assert voz._PREGUNTA_MIC.search("qué micrófono estás usando")
 assert voz._PREGUNTA_MIC.search("cuál micrófono tienes")
 assert not voz._PREGUNTA_MIC.search("abre la calculadora")
 print("micrófono: 10 pruebas OK")
+
+# ---------------------------------------------------------------- salida de audio (TV / audífonos)
+SALIDAS = [
+    {"name": "Asignador de sonido Microsoft - Output", "max_input_channels": 0, "max_output_channels": 2, "hostapi": 0},
+    {"name": "Altavoces (Realtek(R) Audio)", "max_input_channels": 0, "max_output_channels": 2, "hostapi": 0},
+    {"name": "LG TV SSCR2 (NVIDIA High Defini", "max_input_channels": 0, "max_output_channels": 2, "hostapi": 0},
+    {"name": "Auriculares (HyperX Cloud II Wi", "max_input_channels": 0, "max_output_channels": 2, "hostapi": 0},
+    {"name": "Micrófono (Realtek(R) Audio)", "max_input_channels": 2, "max_output_channels": 0, "hostapi": 0},
+]
+
+
+class SdSalida(SdFalso):
+    def query_devices(self, i=None, kind=None):
+        if kind == "output" and i is None:
+            return {"name": "Altavoces (Realtek(R) Audio)"}
+        return super().query_devices(i, kind)
+
+    def check_output_settings(self, device=None, **_):
+        if self.d[device]["max_output_channels"] < 1:
+            raise ValueError("no")
+
+
+class RepFalso:
+    def __init__(self):
+        self.disp = "sin cambiar"
+
+    def cambiar_salida(self, d):
+        self.disp = d
+        return True
+
+
+voz.sd = SdSalida(SALIDAS)
+NO_SIRVEN.clear()
+voz.PARLANTE_ARCHIVO = os.path.join(tempfile.mkdtemp(), "parlante.txt")
+voz.rep = RepFalso()
+r = voz.comando_salida("habla por el televisor")
+assert voz.rep.disp == 2 and "LG TV" in r, (voz.rep.disp, r)
+assert open(voz.PARLANTE_ARCHIVO, encoding="utf-8").read().startswith("LG TV")
+assert voz.resolver_salida()[0] == 2                       # al reiniciar, sigue en la TV
+r = voz.comando_salida("Necesito que te escuches en el televisor")
+assert voz.rep.disp == 2 and r.startswith("Listo")
+r = voz.comando_salida("pásate a los audífonos")
+assert voz.rep.disp == 3, voz.rep.disp
+r = voz.comando_salida("vuelve a hablar por el predeterminado")
+assert voz.rep.disp is None and not os.path.exists(voz.PARLANTE_ARCHIVO)
+assert voz.comando_salida("abre la calculadora") is None
+assert voz.comando_salida("qué hora es") is None
+voz.sd = SdSalida([x for x in SALIDAS if "TV" not in x["name"]])
+r = voz.comando_salida("habla por la tele")
+assert r.startswith("No encuentro un televisor"), r
+assert voz._PREGUNTA_SALIDA.search("por dónde estás hablando")
+print("salida de audio: 8 pruebas OK")
