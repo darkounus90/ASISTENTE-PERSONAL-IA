@@ -4,6 +4,7 @@ Asistente personal tipo JARVIS para Windows: lo activas diciendo **"Pedro, …"*
 
 ## Qué puede hacer
 - **Voz**: escucha con Whisper (local), habla con voces de Microsoft (gratis, ej. `es-CO-GonzaloNeural`). Lo puedes interrumpir hablando.
+- **Cancelación de eco** (como Alexa): se resta su propia voz del micrófono con el procesador de audio de WebRTC, así no se escucha a sí mismo aunque hable por la TV (`JARVIS_AEC=0` lo apaga). Micrófono y parlante se eligen por nombre, y por voz: "habla por el televisor".
 - **Proyectos**: lee y busca en tus carpetas de código, revisa git, abre proyectos en VS Code, levanta servidores (`npm run dev`) en terminales.
 - **Terminales**: las lista, **lee lo que muestran** y escribe en ellas.
 - **Claude Code**: lo abre en un proyecto con un pedido inicial o lo pone a trabajar en segundo plano.

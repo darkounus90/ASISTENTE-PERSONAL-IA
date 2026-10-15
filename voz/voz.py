@@ -9,6 +9,7 @@
 #   "edge-tts>=6.1",
 #   "miniaudio>=1.59",
 #   "httpx>=0.27",
+#   "livekit>=1.0",
 # ]
 # ///
 """
@@ -682,9 +683,108 @@ def vigia() -> None:
 cola: "queue.Queue[np.ndarray]" = queue.Queue()
 
 
+# ----------------------------------------------------------------- Cancelación de eco (como Alexa)
+# Pedro sabe exactamente qué está diciendo (la "referencia") y se lo resta al micrófono con el
+# procesador de audio de WebRTC (el de Google Meet). Así no se escucha a sí mismo aunque hable
+# por la TV, y lo puedes interrumpir hablando normal. JARVIS_AEC=0 lo apaga.
+AEC_ON = os.environ.get("JARVIS_AEC", "1") != "0"
+
+
+class CancelacionEco:
+    MARCO_MIC = SR // 100            # 10 ms a 16 kHz
+    MARCO_REF = SR_TTS // 100        # 10 ms a 24 kHz
+
+    def __init__(self) -> None:
+        from livekit import rtc
+
+        self.rtc = rtc
+        self.apm = rtc.AudioProcessingModule(echo_cancellation=True, noise_suppression=True,
+                                             high_pass_filter=True, auto_gain_control=False)
+        self.lock = threading.Lock()
+        self.ref: collections.deque[np.ndarray] = collections.deque()
+        self.resto = np.zeros(0, dtype=np.int16)
+        self.silencio = np.zeros(self.MARCO_REF, dtype=np.int16)
+        self.activo = True
+
+    def ajustar_retraso(self, segundos: float) -> None:
+        try:
+            self.apm.set_stream_delay_ms(int(max(0.0, min(segundos, 0.5)) * 1000))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def referencia(self, bloque: np.ndarray) -> None:
+        """Lo que acaba de salir por el parlante (24 kHz), en marcos de 10 ms."""
+        if not self.activo:
+            return
+        datos = np.concatenate([self.resto, bloque]) if len(self.resto) else bloque
+        n = len(datos) // self.MARCO_REF * self.MARCO_REF
+        with self.lock:
+            for i in range(0, n, self.MARCO_REF):
+                self.ref.append(datos[i:i + self.MARCO_REF].copy())
+            while len(self.ref) > 100:          # nunca más de 1 s de atraso
+                self.ref.popleft()
+        self.resto = datos[n:].copy()
+
+    def limpiar(self, mic: np.ndarray) -> np.ndarray:
+        """Devuelve el audio del micrófono sin la voz de Pedro."""
+        if not self.activo:
+            return mic
+        try:
+            out = np.empty_like(mic)
+            for i in range(0, len(mic) - self.MARCO_MIC + 1, self.MARCO_MIC):
+                with self.lock:
+                    ref = self.ref.popleft() if self.ref else self.silencio
+                self.apm.process_reverse_stream(self.rtc.AudioFrame(ref.tobytes(), SR_TTS, 1, self.MARCO_REF))
+                marco = self.rtc.AudioFrame(mic[i:i + self.MARCO_MIC].tobytes(), SR, 1, self.MARCO_MIC)
+                self.apm.process_stream(marco)
+                out[i:i + self.MARCO_MIC] = np.frombuffer(bytes(marco.data), dtype=np.int16)
+            return out
+        except Exception as e:  # noqa: BLE001
+            self.activo = False
+            info(f"⚠️  La cancelación de eco falló ({e.__class__.__name__}); sigo sin ella.")
+            return mic
+
+
+ECO: "CancelacionEco | None" = None
+
+
+def _cerrar_eco() -> None:
+    """Libera el procesador antes de que Python cierre (evita un aviso feo de livekit al salir)."""
+    global ECO
+    if ECO is not None:
+        ECO.activo = False
+        try:
+            ECO.apm._ffi_handle.dispose()   # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            pass
+        ECO = None
+    try:
+        from livekit.rtc._ffi_client import FfiHandle
+        FfiHandle.__del__ = lambda self: None   # el proceso ya termina: no liberar dos veces
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def iniciar_eco() -> None:
+    global ECO
+    if not AEC_ON:
+        info("Cancelación de eco: apagada (JARVIS_AEC=0)")
+        return
+    try:
+        ECO = CancelacionEco()
+        atexit.register(_cerrar_eco)
+        info("Cancelación de eco: activa (no me escucho a mí mismo)")
+    except Exception as e:  # noqa: BLE001
+        ECO = None
+        info(f"⚠️  Sin cancelación de eco ({e.__class__.__name__}: {e}); uso el modo anterior.")
+
+
 def _cb(indata, frames, t, status):  # noqa: ARG001
     _ULTIMO_AUDIO[0] = time.time()
-    cola.put(indata[:, 0].copy())
+    bloque = indata[:, 0].copy()
+    if ECO is not None:
+        bloque = ECO.limpiar(bloque)
+    cola.put(bloque)
 
 
 def vaciar_cola() -> None:
@@ -815,6 +915,8 @@ class Reproductor:
                 self._actual = self._actual[k:]
                 n += k
         out[n:] = 0
+        if ECO is not None:
+            ECO.referencia(out)
 
     def agregar(self, audio: np.ndarray) -> None:
         with self._lock:
@@ -1242,7 +1344,8 @@ def responder(texto: str, wake) -> list | None:
                 eco.append(nivel)       # primeros ~0,5 s hablando: aprendo cuánto me oigo a mí mismo
                 continue
             base = float(np.median(eco)) if eco else 0.0
-            limite = max(base * SENS_INTERRUPCION, umbral_voz() * 1.5)
+            # con cancelación de eco mi voz ya casi no llega: basta con que hables normal
+            limite = max(base * SENS_INTERRUPCION, umbral_voz() * (1.0 if ECO is not None and ECO.activo else 1.5))
             seguidos = seguidos + 1 if nivel > limite else 0
             if seguidos >= BLOQUES_INTERRUPCION:
                 cancelar.set()
@@ -1561,6 +1664,7 @@ def main() -> None:
     disp_salida, nombre_salida, aviso_salida = resolver_salida()
     if aviso_salida:
         info(f"⚠️  {aviso_salida}")
+    iniciar_eco()
     rep = Reproductor(disp_salida)
     _SALIDA_ACTUAL[0] = nombre_salida
     if args.voces:
@@ -1595,6 +1699,11 @@ def main() -> None:
 
     mic = Microfono()
     mic.abrir()
+    if ECO is not None:
+        try:   # pista del retraso parlante -> micrófono; WebRTC lo afina solo (también por HDMI)
+            ECO.ajustar_retraso(float(rep._stream.latency) + float(mic.stream.latency) + 0.02)
+        except Exception:  # noqa: BLE001
+            ECO.ajustar_retraso(0.15)
     threading.Thread(target=mic.vigilar, daemon=True).start()
     if True:
         atexit.register(_al_salir)
