@@ -1,0 +1,949 @@
+# /// script
+# requires-python = ">=3.11,<3.12"
+# dependencies = [
+#   "numpy>=1.24,<2.3",
+#   "sounddevice>=0.4.6",
+#   "faster-whisper>=1.1",
+#   "openwakeword==0.6.0",
+#   "onnxruntime>=1.17",
+#   "edge-tts>=6.1",
+#   "miniaudio>=1.59",
+#   "httpx>=0.27",
+# ]
+# ///
+"""
+Voz de Jarvis para Windows (v2: respuesta en streaming).
+
+Escucha "Hey Jarvis", transcribe lo que dices, se lo pasa a Jarvis (que corre
+en WSL con `jarvis serve`) y va leyendo la respuesta frase por frase MIENTRAS
+Claude la escribe, con un reproductor continuo (sin cortes entre frases).
+
+Uso (normalmente desde Jarvis.bat):
+    uv run voz.py               # palabra de activación "Hey Jarvis"
+    uv run voz.py --teclado     # Enter para hablar
+    uv run voz.py --microfonos  # lista micrófonos
+    uv run voz.py --prueba      # medidor de micrófono y "Hey Jarvis"
+    uv run voz.py --voces       # escuchar voces para elegir
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import collections
+import json
+import os
+import queue
+import re
+import sys
+import threading
+import time
+
+import numpy as np
+import sounddevice as sd
+
+# ----------------------------------------------------------------- CONFIG
+API = os.environ.get("JARVIS_API", "http://127.0.0.1:8787").rstrip("/")
+API_KEY = os.environ.get("OPENJARVIS_API_KEY", "")
+MODELO = os.environ.get("JARVIS_MODEL", "claude-sonnet-5-5")
+VOZ = os.environ.get("JARVIS_VOZ", "en-US-AndrewMultilingualNeural")
+VELOCIDAD = os.environ.get("JARVIS_VELOCIDAD", "+4%")
+TONO = os.environ.get("JARVIS_TONO", "-2Hz")
+# ElevenLabs (voces humanas, p. ej. acento colombiano). Si hay key y voz, se usa en vez de Microsoft.
+ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVEN_VOZ = os.environ.get("ELEVENLABS_VOICE_ID", "")
+ELEVEN_MODELO = os.environ.get("ELEVENLABS_MODEL", "eleven_flash_v2_5")   # o eleven_multilingual_v2 (más calidad, más lento)
+ELEVEN_BASE = os.environ.get("ELEVENLABS_BASE", "https://api.elevenlabs.io")
+# VoiceStudio (voz local y gratis en tu GPU): nombre del perfil de voz creado en la app.
+VS_URL = os.environ.get("VOICESTUDIO_URL", "http://127.0.0.1:3900").rstrip("/")
+VS_VOZ = os.environ.get("VOICESTUDIO_VOZ", "")
+VS_MODELO = os.environ.get("VOICESTUDIO_MODELO", "omnivoice")
+VS_ESTILO = os.environ.get("VOICESTUDIO_ESTILO", "")   # opcional, ej. "acento colombiano, tono cálido"
+STT_MODELO = os.environ.get("JARVIS_STT", "small")              # tiny/base/small/medium
+STT_DEVICE = os.environ.get("JARVIS_STT_DEVICE", "cpu")         # cpu o cuda
+UMBRAL_WAKE = float(os.environ.get("JARVIS_UMBRAL", "0.5"))
+# "nombre": Whisper escucha y se activa al oír "Jarvis" (funciona con acento en español)
+# "hey": detector openWakeWord "Hey Jarvis" (entrenado en inglés)
+ACTIVACION = os.environ.get("JARVIS_ACTIVACION", "nombre")
+NOMBRE = os.environ.get("JARVIS_NOMBRE", "Pedro")
+AGENTE = os.environ.get("JARVIS_AGENTE", "simple")
+INTERRUPCION = os.environ.get("JARVIS_INTERRUPCION", "1") != "0"      # callarse si le hablas
+SENS_INTERRUPCION = float(os.environ.get("JARVIS_SENS_INTERRUPCION", "3.2"))  # más alto = menos sensible
+BLOQUES_INTERRUPCION = 4   # ~0,3 s de voz sostenida para interrumpir
+RESUMEN_HORA = os.environ.get("JARVIS_RESUMEN_HORA", "07:00")   # "" para desactivar
+RECORDATORIOS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "recordatorios.json")
+PROMPT_RESUMEN = ("[voz] Dame mi resumen de la mañana: primero mi agenda de hoy (usa agenda) y luego "
+                  "los correos importantes no leídos de las últimas 24 horas (usa correos_recientes con "
+                  "consulta 'is:unread newer_than:1d -category:promotions -category:social'). Menciona "
+                  "solo lo que requiera mi atención. Máximo 5 frases, sin leer ids ni enlaces.")
+SEGUIMIENTO = float(os.environ.get("JARVIS_SEGUIMIENTO", "10"))  # seg. para seguir hablando sin "Hey Jarvis"
+MIC = os.environ.get("JARVIS_MIC")                              # índice o nombre del micrófono
+
+SR = 16000          # Hz del micrófono (lo que esperan Whisper y openWakeWord)
+CHUNK = 1280        # 80 ms por bloque
+SILENCIO_FIN = float(os.environ.get("JARVIS_SILENCIO", "1.4"))  # seg. de silencio que cierran tu frase
+MAX_FRASE = 25      # seg. máximos por frase
+HISTORIAL = 12      # mensajes que recuerda en la conversación hablada
+SR_TTS = 24000      # Hz de la voz sintetizada
+PAUSA_FRASE = 0.18  # seg. de silencio natural entre frases
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+
+class _Tee:
+    """Muestra en pantalla y además guarda en registro.log (para diagnosticar)."""
+
+    def __init__(self, consola, archivo):
+        self.consola, self.archivo = consola, archivo
+
+    def write(self, txt):
+        self.consola.write(txt)
+        try:
+            self.archivo.write(txt)
+            self.archivo.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def flush(self):
+        self.consola.flush()
+
+    def __getattr__(self, nombre):
+        return getattr(self.consola, nombre)
+
+
+try:
+    _log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "registro.log"),
+                "a", encoding="utf-8")
+    _log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+    sys.stdout = _Tee(sys.stdout, _log)
+    sys.stderr = _Tee(sys.stderr, _log)
+except Exception:  # noqa: BLE001
+    pass
+
+
+def info(msg: str) -> None:
+    print(f"  {msg}", flush=True)
+
+
+def dispositivo_mic():
+    return int(MIC) if MIC and MIC.isdigit() else MIC
+
+
+# ----------------------------------------------------------------- Eventos (recordatorios y resumen)
+eventos: "queue.Queue[tuple]" = queue.Queue()
+_TZ = __import__("datetime").timezone(__import__("datetime").timedelta(hours=-5))  # Colombia, sin horario de verano
+
+
+def _ahora_local():
+    from datetime import datetime
+    return datetime.now(_TZ)
+
+
+def vigia() -> None:
+    """Cada 5 s: recordatorios vencidos y resumen de la mañana (una vez al día)."""
+    marca = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ultimo_resumen.txt")
+    while True:
+        try:
+            if os.path.exists(RECORDATORIOS):
+                with open(RECORDATORIOS, encoding="utf-8") as f:
+                    lista = json.load(f)
+                vencidos = [r for r in lista if not r.get("hecho") and r.get("cuando", 0) <= time.time()]
+                if vencidos:
+                    for r in vencidos:
+                        r["hecho"] = True
+                        eventos.put(("recordatorio", r.get("texto", "")))
+                    tmp = RECORDATORIOS + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(lista, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp, RECORDATORIOS)
+            if RESUMEN_HORA and AGENTE != "simple":
+                ahora = _ahora_local()
+                hoy = ahora.strftime("%Y-%m-%d")
+                ultimo = open(marca).read().strip() if os.path.exists(marca) else ""
+                if ultimo != hoy and RESUMEN_HORA <= ahora.strftime("%H:%M") < "12:00":
+                    open(marca, "w").write(hoy)
+                    eventos.put(("resumen", ""))
+        except Exception as e:  # noqa: BLE001
+            print(f"  (vigía: {e.__class__.__name__}: {e})", flush=True)
+        time.sleep(5)
+
+
+# ----------------------------------------------------------------- Micrófono
+cola: "queue.Queue[np.ndarray]" = queue.Queue()
+
+
+def _cb(indata, frames, t, status):  # noqa: ARG001
+    cola.put(indata[:, 0].copy())
+
+
+def vaciar_cola() -> None:
+    while not cola.empty():
+        try:
+            cola.get_nowait()
+        except queue.Empty:
+            break
+
+
+def rms(x: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(x.astype(np.float32) ** 2))) if len(x) else 0.0
+
+
+ruido = collections.deque(maxlen=40)  # ~3 s de nivel de fondo
+
+
+def umbral_voz() -> float:
+    base = float(np.median(ruido)) if ruido else 200.0
+    return max(base * 3.0, 500.0)
+
+
+def grabar_frase(espera_max: float, previo: list | None = None) -> np.ndarray | None:
+    """Graba hasta que dejes de hablar. None si no hablaste en `espera_max` seg.
+    `previo`: audio ya capturado (cuando interrumpiste a Pedro) para no perder tu inicio."""
+    partes: list[np.ndarray] = list(previo or [])
+    hablo = bool(previo)
+    inicio = time.time()
+    ultimo_sonido = time.time()
+    limite = umbral_voz()
+    while True:
+        bloque = cola.get()
+        nivel = rms(bloque)
+        ahora = time.time()
+        if nivel > (limite * 0.55 if hablo else limite):   # ya hablando: oído más fino
+            if not hablo:
+                hablo = True
+                inicio = ahora
+            ultimo_sonido = ahora
+        if hablo:
+            partes.append(bloque)
+            if ahora - ultimo_sonido > SILENCIO_FIN or ahora - inicio > MAX_FRASE:
+                break
+        else:
+            partes = (partes + [bloque])[-5:]  # guarda 400 ms previos al inicio
+            ruido.append(nivel)
+            if ahora - inicio > espera_max or not eventos.empty():
+                return None
+    return np.concatenate(partes)
+
+
+# ----------------------------------------------------------------- Reproductor continuo
+class Reproductor:
+    """Un único stream de salida abierto todo el tiempo. Las frases se van
+    encolando y suenan una tras otra sin cortes ni chasquidos."""
+
+    def __init__(self) -> None:
+        self._buf: collections.deque[np.ndarray] = collections.deque()
+        self._actual = np.zeros(0, dtype=np.int16)
+        self._lock = threading.Lock()
+        self._stream = sd.OutputStream(samplerate=SR_TTS, channels=1, dtype="int16",
+                                       latency="high", blocksize=2048, callback=self._cb)
+        self._stream.start()
+
+    def _cb(self, outdata, frames, t, status):  # noqa: ARG002
+        out = outdata[:, 0]
+        n = 0
+        with self._lock:
+            while n < frames:
+                if len(self._actual) == 0:
+                    if not self._buf:
+                        break
+                    self._actual = self._buf.popleft()
+                k = min(frames - n, len(self._actual))
+                out[n:n + k] = self._actual[:k]
+                self._actual = self._actual[k:]
+                n += k
+        out[n:] = 0
+
+    def agregar(self, audio: np.ndarray) -> None:
+        with self._lock:
+            self._buf.append(audio)
+
+    def callar(self) -> None:
+        with self._lock:
+            self._buf.clear()
+            self._actual = np.zeros(0, dtype=np.int16)
+
+    def ocupado(self) -> bool:
+        with self._lock:
+            return bool(self._buf) or len(self._actual) > 0
+
+    def esperar(self) -> None:
+        while self.ocupado():
+            time.sleep(0.03)
+
+
+rep: Reproductor | None = None
+
+
+def beep(freq: float = 880, dur: float = 0.12) -> None:
+    t = np.linspace(0, dur, int(SR_TTS * dur), endpoint=False)
+    onda = (8000 * np.sin(2 * np.pi * freq * t) * np.hanning(len(t))).astype(np.int16)
+    rep.agregar(onda)
+    rep.esperar()
+
+
+# ----------------------------------------------------------------- Oír (Whisper)
+def cargar_stt():
+    from faster_whisper import WhisperModel
+
+    if STT_DEVICE == "cuda":
+        try:
+            m = WhisperModel(STT_MODELO, device="cuda", compute_type="float16")
+            m.transcribe(np.zeros(SR, dtype=np.float32), language="es")
+            info(f"Oído: Whisper {STT_MODELO} en GPU")
+            return m
+        except Exception as e:  # noqa: BLE001
+            info(f"GPU no disponible para Whisper ({e.__class__.__name__}); uso CPU")
+    m = WhisperModel(STT_MODELO, device="cpu", compute_type="int8")
+    m.transcribe(np.zeros(SR, dtype=np.float32), language="es")  # calentar
+    info(f"Oído: Whisper {STT_MODELO} en CPU")
+    return m
+
+
+# Vocabulario de Andres: ayuda a Whisper con nombres propios y términos técnicos.
+VOCABULARIO = os.environ.get("JARVIS_VOCABULARIO", (
+    "Pedro, Claude Code, 18 Kilates, la joyería, CHECK, Onnyx, Onnyx Software, VS Code, "
+    "Comet, Vercel, Railway, Supabase, Next.js, NestJS, Notion, Obsidian, Dropi, Motojaponesa, "
+    "recordatorio, abre la carpeta, abre el proyecto, lanza Claude Code."))
+
+
+_A_MEDIAS = re.compile(
+    r"(?:\b(?:y|e|o|u|que|de|del|la|el|los|las|un|una|en|con|por|para|pero|porque|entonces|"
+    r"como|cuando|si|a|al|mi|tu|su|eh|em|mmm+|este|esto|osea|o sea|digamos|bueno)|,|…|\.\.\.)\W*$",
+    re.IGNORECASE)
+
+
+def frase_a_medias(texto: str) -> bool:
+    """¿La frase parece cortada? (termina en 'y', 'que', 'de', 'eh', coma…)"""
+    return bool(_A_MEDIAS.search(texto.strip()))
+
+
+def escuchar_completo(stt, audio: np.ndarray) -> str:
+    """Transcribe y, si quedaste a medias, sigue escuchando (hasta 2 veces más)."""
+    texto = transcribir(stt, audio)
+    for _ in range(2):
+        if not texto or not frase_a_medias(texto):
+            break
+        info("(sigo escuchando…)")
+        resto = grabar_frase(espera_max=2.5)
+        if resto is None:
+            break
+        audio = np.concatenate([audio, resto])
+        texto = transcribir(stt, audio)
+    return texto
+
+
+def transcribir(stt, audio: np.ndarray) -> str:
+    f = audio.astype(np.float32) / 32768.0
+    segs, _ = stt.transcribe(f, language="es", beam_size=1, vad_filter=True,
+                             initial_prompt=VOCABULARIO, condition_on_previous_text=False)
+    return " ".join(s.text.strip() for s in segs).strip()
+
+
+# ----------------------------------------------------------------- Hablar (voz neural)
+_ABREV = [
+    (r"\bp\.\s?ej\.", "por ejemplo"), (r"\betc\.", "etcétera"), (r"\bvs\.?(?=\s)", "contra"),
+    (r"\bapro?x\.", "aproximadamente"), (r"\bSr\.", "señor"), (r"\bSra\.", "señora"),
+    (r"\bDr\.", "doctor"), (r"\bpág\.", "página"), (r"\bnúm\.", "número"), (r"\bmin\.", "minutos"),
+    (r"\bseg\.", "segundos"), (r"\bEE\.?\s?UU\.?", "Estados Unidos"), (r"\bq\b", "que"),
+]
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]+")
+
+
+def _hora(m: re.Match) -> str:
+    h, mi, suf = int(m.group(1)), m.group(2), (m.group(3) or "").lower().replace(".", "")
+    tarde = suf == "pm" or (not suf and h >= 13)
+    h12 = h % 12 or 12
+    momento = ""
+    if suf or h >= 13:
+        momento = " de la noche" if tarde and h12 >= 7 and h12 != 12 else (
+            " de la tarde" if tarde else (" de la mañana" if h12 != 12 else " del mediodía"))
+    minutos = "" if not mi or mi == "00" else (" y media" if mi == "30" else f" y {int(mi)}")
+    return f"{h12}{minutos}{momento}"
+
+
+def limpiar_para_voz(txt: str) -> str:
+    """Deja el texto como lo diría una persona: sin markdown, emojis ni símbolos."""
+    txt = re.sub(r"```.*?```", " (te dejé código en pantalla) ", txt, flags=re.S)
+    txt = re.sub(r"`([^`]*)`", r"\1", txt)
+    txt = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", txt)
+    txt = re.sub(r"https?://\S+", "el enlace", txt)
+    txt = re.sub(r"\[\[([^\]|]+)(\|[^\]]*)?\]\]", r"\1", txt)      # [[nota]] de Obsidian
+    txt = _EMOJI.sub("", txt)
+    txt = re.sub(r"^\s*(\d+[.)]|[-•*])\s+", "", txt, flags=re.M)   # viñetas y listas numeradas
+    txt = re.sub(r"[*_#>|~]+", "", txt)
+    for patron, dicho in _ABREV:
+        txt = re.sub(patron, dicho, txt, flags=re.I)
+    txt = re.sub(r"\b(\d{1,2}):(\d{2})\s*([ap]\.?\s?m\.?)?(?![\w:])", _hora, txt, flags=re.I)
+    txt = re.sub(r"\b(\d{1,2})()\s*([ap]\.?\s?m\.?)(?!\w)", _hora, txt, flags=re.I)
+    txt = re.sub(r"(\d)\s*%", r"\1 por ciento", txt)
+    txt = re.sub(r"\$\s?(\d[\d.,]*)", r"\1 pesos", txt)
+    txt = re.sub(r"\s*&\s*", " y ", txt)
+    txt = re.sub(r"\s+[–—-]\s+", ", ", txt)                       # guiones de inciso -> pausa
+    txt = re.sub(r"\s*\(([^)]{1,80})\)", r", \1,", txt)             # paréntesis -> inciso hablado
+    txt = re.sub(r"\s+/\s+|\by/o\b", " o ", txt)
+    txt = re.sub(r"\s*\n+\s*", ". ", txt)
+    txt = re.sub(r"\s+", " ", txt)
+    txt = re.sub(r"\s+([,.;:!?])", r"\1", txt)
+    txt = re.sub(r"([:;!?])\s*\.(?!\.)", r"\1", txt)
+    txt = re.sub(r"([,;:])\1+|,\s*([.!?])", lambda m: m.group(1) or m.group(2), txt)
+    txt = re.sub(r"\.{2,}(?!\.)", "…", txt)
+    return re.sub(r"(?:[.,]\s*){2,}", ". ", txt).strip(" ,")
+
+
+async def _tts_mp3(texto: str, voz: str) -> bytes:
+    import edge_tts
+
+    buf = bytearray()
+    async for parte in edge_tts.Communicate(texto, voz, rate=VELOCIDAD, pitch=TONO).stream():
+        if parte["type"] == "audio":
+            buf.extend(parte["data"])
+    return bytes(buf)
+
+
+_ELEVEN_FALLO = [False]
+_VS_FALLO = [False]
+
+
+def _voicestudio_pcm(texto: str) -> np.ndarray:
+    import httpx
+
+    cuerpo = {"model": VS_MODELO, "input": texto, "voice": VS_VOZ, "response_format": "pcm"}
+    if VS_ESTILO:
+        cuerpo["instructions"] = VS_ESTILO
+    r = httpx.post(f"{VS_URL}/v1/audio/speech", json=cuerpo, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(f"VoiceStudio respondió {r.status_code}: {r.text[:200]}")
+    return np.frombuffer(r.content, dtype="<i2").astype(np.int16)   # 24 kHz, 16 bits, mono
+
+
+def _eleven_pcm(texto: str) -> np.ndarray:
+    import httpx
+
+    r = httpx.post(f"{ELEVEN_BASE}/v1/text-to-speech/{ELEVEN_VOZ}",
+                   params={"output_format": "pcm_24000"},
+                   headers={"xi-api-key": ELEVEN_KEY, "content-type": "application/json"},
+                   json={"text": texto, "model_id": ELEVEN_MODELO,
+                         "voice_settings": {"stability": 0.45, "similarity_boost": 0.8,
+                                            "style": 0.15, "use_speaker_boost": True}},
+                   timeout=30)
+    if r.status_code != 200:
+        raise RuntimeError(f"ElevenLabs respondió {r.status_code}: {r.text[:200]}")
+    return np.frombuffer(r.content, dtype="<i2").astype(np.int16)
+
+
+def sintetizar(texto: str, voz: str | None = None) -> np.ndarray:
+    if VS_VOZ and voz is None and not _VS_FALLO[0]:
+        try:
+            audio = _voicestudio_pcm(texto)
+        except Exception as e:  # noqa: BLE001
+            _VS_FALLO[0] = True   # no reintentar en cada frase
+            info(f"⚠️  VoiceStudio falló ({e}); uso la voz de Microsoft. ¿Está abierta la app?")
+            return sintetizar(texto, VOZ)
+    elif ELEVEN_KEY and ELEVEN_VOZ and voz is None and not _ELEVEN_FALLO[0]:
+        try:
+            audio = _eleven_pcm(texto)
+        except Exception as e:  # noqa: BLE001
+            _ELEVEN_FALLO[0] = True   # no reintentar en cada frase: vuelve a la voz de Microsoft
+            info(f"⚠️  ElevenLabs falló ({e}); uso la voz de Microsoft.")
+            return sintetizar(texto, VOZ)
+    else:
+        import miniaudio
+
+        mp3 = asyncio.run(_tts_mp3(texto, voz or VOZ))
+        dec = miniaudio.decode(mp3, output_format=miniaudio.SampleFormat.SIGNED16,
+                               nchannels=1, sample_rate=SR_TTS)
+        audio = np.array(dec.samples, dtype=np.int16)
+    # recorta silencios de los extremos y añade una pausa natural corta
+    voz_idx = np.nonzero(np.abs(audio) > 200)[0]
+    if len(voz_idx):   # deja respirar el inicio (50 ms) y la cola (100 ms) para no comerse sílabas
+        audio = audio[max(0, voz_idx[0] - 1200): voz_idx[-1] + 2400]
+    audio = audio.astype(np.float32)
+    n = min(len(audio) // 2, 240)                      # fundido de 10 ms: sin chasquidos
+    if n:
+        rampa = np.linspace(0.0, 1.0, n, dtype=np.float32)
+        audio[:n] *= rampa
+        audio[-n:] *= rampa[::-1]
+    audio = audio.astype(np.int16)
+    pausa = PAUSA_FRASE * (1.6 if texto.rstrip().endswith(("?", "!", ".", "…")) else 0.6)
+    return np.concatenate([audio, np.zeros(int(SR_TTS * pausa), dtype=np.int16)])
+
+
+def decir(texto: str) -> None:
+    """Frase corta fija (avisos). Bloquea hasta terminar."""
+    try:
+        rep.agregar(sintetizar(texto))
+        rep.esperar()
+    except Exception as e:  # noqa: BLE001
+        info(f"⚠️  No pude generar la voz ({e.__class__.__name__}). ¿Hay internet?")
+
+
+# ----------------------------------------------------------------- Partir en frases
+_FIN_FRASE = re.compile(r"([.!?…;](?=\s)|:(?=\s)|\n)")
+_NO_FIN = re.compile(r"(\b(?:p\. ?ej|etc|Sr|Sra|Dr|aprox|pág|núm|vs|[A-Z])\.|\d\.)$", re.I)
+
+
+def extraer_frases(buf: str, primera: bool) -> tuple[list[str], str]:
+    """Agrupa oraciones COMPLETAS en bloques de buen tamaño. Cortar a mitad de
+    oración (o en trozos muy cortos) rompe la entonación y hace que la voz
+    multilingüe a veces cambie de acento. La primera oración sale sola para
+    empezar a hablar rápido; las siguientes se juntan hasta ~180 caracteres."""
+    frases: list[str] = []
+    minimo = 20 if primera else 140
+    inicio = 0
+    for m in _FIN_FRASE.finditer(buf):
+        corte = m.end()
+        trozo = buf[inicio:corte].strip()
+        if _NO_FIN.search(trozo):
+            continue               # "p. ej." o "2." no terminan la oración
+        if len(trozo) >= minimo:
+            frases.append(trozo)
+            inicio = corte
+            minimo = 140
+    resto = buf[inicio:]
+    if len(resto) > 320:           # oración larguísima sin punto: corta en la última coma
+        c = resto.rfind(", ", 0, 300)
+        if c > 60:
+            frases.append(resto[:c + 1].strip())
+            resto = resto[c + 1:]
+    return frases, resto
+
+
+# ----------------------------------------------------------------- Cerebro (Jarvis en WSL)
+historial: list[dict] = []
+_INTERRUMPIDA = [False]   # ¿la última respuesta fue cortada por Andres?
+_MARCA = re.compile(r"\s*\[Andres me interrumpió aquí\]")
+HISTORIAL_ARCHIVO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "historial.json")
+HISTORIAL_HORAS = float(os.environ.get("JARVIS_HISTORIAL_HORAS", "8"))
+
+
+def cargar_historial() -> None:
+    """Retoma la conversación anterior si fue hace menos de HISTORIAL_HORAS."""
+    try:
+        with open(HISTORIAL_ARCHIVO, encoding="utf-8") as f:
+            datos = json.load(f)
+        if time.time() - datos.get("guardado", 0) < HISTORIAL_HORAS * 3600:
+            for m in datos.get("mensajes", [])[-HISTORIAL:]:
+                historial.append({**m, "content": _MARCA.sub("", m.get("content", ""))})
+            info(f"Memoria: retomo la conversación anterior ({len(historial)} mensajes).")
+    except (OSError, ValueError):
+        pass
+
+
+def guardar_historial() -> None:
+    try:
+        tmp = HISTORIAL_ARCHIVO + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"guardado": time.time(), "mensajes": historial[-HISTORIAL:]}, f,
+                      ensure_ascii=False, indent=1)
+        os.replace(tmp, HISTORIAL_ARCHIVO)
+    except OSError:
+        pass
+
+
+def stream_respuesta(cancelar: threading.Event):
+    """Genera los trozos de texto a medida que Claude los escribe."""
+    import httpx
+
+    headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
+    cuerpo = {"model": MODELO, "messages": historial[-HISTORIAL:], "max_tokens": 600,
+              "stream": True}
+    with httpx.stream("POST", f"{API}/v1/chat/completions", headers=headers,
+                      json=cuerpo, timeout=httpx.Timeout(120, connect=10)) as r:
+        r.raise_for_status()
+        for linea in r.iter_lines():
+            if cancelar.is_set():
+                return
+            if not linea.startswith("data:"):
+                continue
+            dato = linea[5:].strip()
+            if dato == "[DONE]":
+                return
+            try:
+                delta = json.loads(dato)["choices"][0].get("delta", {}).get("content")
+            except (ValueError, KeyError, IndexError, TypeError):
+                continue
+            if delta:
+                yield delta
+
+
+def jarvis_en_linea() -> bool:
+    import httpx
+
+    try:
+        return httpx.get(f"{API}/health", timeout=5).status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def responder(texto: str, wake) -> list | None:
+    """Pide la respuesta en streaming y la va diciendo frase por frase.
+    Si dices "Hey Jarvis" mientras habla, se calla."""
+    contenido = texto if texto.startswith("[voz]") else f"[voz] {texto}"
+    if _INTERRUMPIDA[0]:
+        contenido = contenido.replace("[voz]", "[voz] (te interrumpí mientras hablabas)", 1)
+        _INTERRUMPIDA[0] = False
+    historial.append({"role": "user", "content": contenido})
+    cancelar = threading.Event()
+    frases_q: "queue.Queue[str | None]" = queue.Queue()
+    completo: list[str] = []
+    error: list[Exception] = []
+    t0 = time.time()
+    primer_audio: list[float] = []
+    tiempos: dict[str, float] = {}
+
+    def productor():
+        buf, primera = "", True
+        try:
+            for trozo in stream_respuesta(cancelar):
+                if not completo:
+                    tiempos["primera_palabra"] = time.time() - t0
+                completo.append(trozo)
+                print(trozo, end="", flush=True)
+                buf += trozo
+                frases, buf = extraer_frases(buf, primera)
+                for f in frases:
+                    primera = False
+                    frases_q.put(f)
+            if buf.strip():
+                frases_q.put(buf.strip())
+            tiempos["respuesta_completa"] = time.time() - t0
+        except Exception as e:  # noqa: BLE001
+            error.append(e)
+        finally:
+            frases_q.put(None)
+
+    def locutor():
+        while not cancelar.is_set():
+            f = frases_q.get()
+            if f is None:
+                return
+            limpio = limpiar_para_voz(f)
+            if not limpio:
+                continue
+            try:
+                t_voz = time.time()
+                audio = sintetizar(limpio)
+                tiempos.setdefault("voz_1a_frase", time.time() - t_voz)
+            except Exception as e:  # noqa: BLE001
+                error.append(e)
+                continue
+            if not cancelar.is_set():
+                if not primer_audio:
+                    primer_audio.append(time.time() - t0)
+                rep.agregar(audio)
+
+    print(f"  {NOMBRE}: ", end="", flush=True)
+    t_prod = threading.Thread(target=productor, daemon=True)
+    t_loc = threading.Thread(target=locutor, daemon=True)
+    t_prod.start()
+    t_loc.start()
+
+    vaciar_cola()
+    interrumpido = False
+    previo: list | None = None          # audio tuyo si me interrumpiste hablando
+    recientes = collections.deque(maxlen=8)
+    eco: list[float] = []               # nivel de mi propia voz en el micrófono
+    seguidos = 0
+    try:
+        import msvcrt  # Windows: detectar teclas sin bloquear
+    except ImportError:
+        msvcrt = None
+    while t_loc.is_alive() or rep.ocupado():
+        if msvcrt is not None and msvcrt.kbhit():
+            while msvcrt.kbhit():
+                msvcrt.getwch()
+            cancelar.set()
+            rep.callar()
+            interrumpido = True
+            break
+        try:
+            bloque = cola.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        recientes.append(bloque)
+        if INTERRUPCION:
+            nivel = rms(bloque)
+            if rep.ocupado() and len(eco) < 6:
+                eco.append(nivel)       # primeros ~0,5 s hablando: aprendo cuánto me oigo a mí mismo
+                continue
+            base = float(np.median(eco)) if eco else 0.0
+            limite = max(base * SENS_INTERRUPCION, umbral_voz() * 1.5)
+            seguidos = seguidos + 1 if nivel > limite else 0
+            if seguidos >= BLOQUES_INTERRUPCION:
+                cancelar.set()
+                rep.callar()
+                interrumpido = True
+                previo = list(recientes)
+                break
+        if wake is not None and max(wake.predict(bloque).values()) > UMBRAL_WAKE:
+            cancelar.set()
+            rep.callar()
+            wake.reset()
+            interrumpido = True
+            break
+    print("", flush=True)
+    if primer_audio:
+        info(f"(empezó a hablar en {primer_audio[0]:.1f}s · Claude 1a palabra "
+             f"{tiempos.get('primera_palabra', 0):.1f}s · respuesta completa "
+             f"{tiempos.get('respuesta_completa', 0):.1f}s · voz 1a frase "
+             f"{tiempos.get('voz_1a_frase', 0):.1f}s)")
+    if interrumpido:
+        info("(me interrumpiste: te escucho)" if previo else "(interrumpido)")
+    respuesta = "".join(completo)
+    if respuesta:
+        historial.append({"role": "assistant", "content": respuesta})
+        _INTERRUMPIDA[0] = interrumpido
+        guardar_historial()
+    else:
+        historial.pop()  # no guardes una pregunta sin respuesta
+    if error and not respuesta:
+        info(f"⚠️  No pude hablar con Jarvis: {error[0]}")
+        decir("No pude comunicarme con el servidor.")
+    print("", flush=True)
+    if previo is None:
+        vaciar_cola()   # si me interrumpiste, NO borro lo que sigues diciendo
+    return previo
+
+
+# ----------------------------------------------------------------- Activación por nombre
+_NOMBRE = re.compile(r"\b(?:oye|hey|ey|ok|okay|hola)?[\s,]*" + re.escape(NOMBRE) + r"\b[\s,.:!¡?¿-]*",
+                     re.IGNORECASE)
+
+
+_PARAR = re.compile(
+    r"^\W*(?:ya\W+)?(para|párale|parale|detente|cállate|callate|silencio|stop|basta|cancela|"
+    r"olvídalo|olvidalo|nada|está bien|esta bien|ya está|ya esta|eso es todo|listo)"
+    r"(?:\W+(?:gracias|por favor|pedro|ya))*\W*$", re.IGNORECASE)
+_DORMIR = re.compile(r"\b(duérmete|duermete|a dormir|modo silencio|en pausa|pausa|pausado|"
+                     r"descansa|no escuches|deja de escuchar)\b", re.IGNORECASE)
+_DESPERTAR = re.compile(r"\b(despierta|despiértate|despiertate|vuelve|activa|actívate|"
+                        r"activate|estás ahí|estas ahi)\b", re.IGNORECASE)
+
+
+def es_parar(texto: str) -> bool:
+    return bool(_PARAR.match(texto.strip()))
+
+
+def buscar_nombre(texto: str) -> tuple[bool, str]:
+    """¿Dijo el nombre? Devuelve (sí/no, lo que dijo después del nombre)."""
+    m = _NOMBRE.search(texto)
+    if not m:
+        return False, ""
+    return True, texto[m.end():].strip()
+
+
+# ----------------------------------------------------------------- Bucle principal
+def procesar_eventos(wake) -> None:
+    while not eventos.empty():
+        tipo, texto = eventos.get()
+        if tipo == "recordatorio":
+            info(f"⏰ Recordatorio: {texto}")
+            beep(988, 0.15)
+            decir(f"Andrés, te recuerdo: {texto}")
+        elif tipo == "resumen":
+            info("☀️  Resumen de la mañana")
+            decir("Buenos días, Andrés. Te doy el resumen de hoy.")
+            responder(PROMPT_RESUMEN, wake)
+
+def turno(stt, wake, espera: float, texto_previo: str = "") -> bool:
+    """Un turno de conversación. Devuelve True si hubo conversación.
+    Si me interrumpes mientras hablo, sigo escuchándote y respondo a lo que dijiste."""
+    previo = None
+    if texto_previo:
+        print(f"\n  Tú: {texto_previo}", flush=True)
+        previo = responder(texto_previo, wake)
+        if previo is None:
+            return True
+    while True:
+        info("🎙️  Te escucho..." if previo is None else "🎙️  Te escucho (me interrumpiste)...")
+        audio = grabar_frase(espera, previo)
+        if audio is None:
+            return False
+        t0 = time.time()
+        texto = escuchar_completo(stt, audio)
+        if len(texto) < 2:
+            info("(no entendí nada)")
+            return False
+        print(f"\n  Tú: {texto}   (entendido en {time.time() - t0:.1f}s)", flush=True)
+        if es_parar(texto):
+            info("(ok, me detengo)")
+            beep(440, 0.08)
+            return False
+        previo = responder(texto, wake)
+        if previo is None:
+            return True
+
+
+VOCES_CANDIDATAS = [
+    ("1", "en-US-AndrewMultilingualNeural", "Andrew · multilingüe, masculina, muy natural"),
+    ("2", "en-US-BrianMultilingualNeural", "Brian · multilingüe, masculina, cálida"),
+    ("3", "en-US-AvaMultilingualNeural", "Ava · multilingüe, femenina, muy natural"),
+    ("4", "en-US-EmmaMultilingualNeural", "Emma · multilingüe, femenina"),
+    ("5", "fr-FR-RemyMultilingualNeural", "Rémy · multilingüe, masculina, grave"),
+    ("6", "es-MX-JorgeNeural", "Jorge · México"),
+    ("7", "es-ES-AlvaroNeural", "Álvaro · España"),
+    ("8", "es-CO-SalomeNeural", "Salomé · Colombia"),
+    ("9", "es-CO-GonzaloNeural", "Gonzalo · Colombia"),
+]
+
+
+def probar_voces() -> None:
+    frase = ("Hola Andrés, soy Pedro. Revisé tus pendientes: tienes dos entregas esta semana "
+             "y el servidor de producción está estable. ¿Por dónde empezamos?")
+    print("\n  Escucha cada voz. Ctrl+C para salir.\n")
+    for num, voz, desc in VOCES_CANDIDATAS:
+        print(f"  [{num}] {desc}", flush=True)
+        try:
+            rep.agregar(sintetizar(frase, voz))
+            rep.esperar()
+        except Exception as e:  # noqa: BLE001
+            print(f"      (no disponible: {e.__class__.__name__})")
+        time.sleep(0.4)
+    print("\n  Dime el número de la que más te gustó.")
+
+
+def prueba_mic() -> None:
+    from openwakeword.model import Model
+    from openwakeword.utils import download_models
+
+    download_models(model_names=["hey_jarvis"])
+    wake = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+    disp = dispositivo_mic()
+    nombre = sd.query_devices(disp, kind="input")["name"]
+    print(f"\n  Micrófono: {nombre}")
+    print("  Habla normal y luego di 'Hey Jarvis' varias veces. Ctrl+C para salir.\n")
+    pico = 0.0
+    with sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=CHUNK,
+                        callback=_cb, device=disp):
+        while True:
+            bloque = cola.get()
+            nivel = rms(bloque)
+            score = float(max(wake.predict(bloque).values()))
+            pico = max(pico * 0.97, score)
+            barra = "#" * min(40, int(nivel / 100))
+            marca = "  <-- HEY JARVIS!" if score > UMBRAL_WAKE else ""
+            print(f"\r  nivel {int(nivel):5d} |{barra:<40}|  hey_jarvis {pico:0.2f}{marca}   ",
+                  end="", flush=True)
+
+
+def main() -> None:
+    global rep
+    ap = argparse.ArgumentParser(description="Voz de Jarvis")
+    ap.add_argument("--teclado", action="store_true", help="Enter para hablar, sin 'Hey Jarvis'")
+    ap.add_argument("--microfonos", action="store_true", help="Lista micrófonos y sale")
+    ap.add_argument("--voces", action="store_true", help="Escucha varias voces para elegir")
+    ap.add_argument("--prueba", action="store_true", help="Medidor en vivo de micrófono y 'Hey Jarvis'")
+    args = ap.parse_args()
+
+    if args.microfonos:
+        print(sd.query_devices())
+        print("\n  Micrófono por defecto:", sd.query_devices(kind="input")["name"])
+        return
+    if args.prueba:
+        prueba_mic()
+        return
+
+    rep = Reproductor()
+    if args.voces:
+        probar_voces()
+        return
+
+    print(f"\n  ── {NOMBRE} · voz ──────────────────────────────")
+    if not jarvis_en_linea():
+        info(f"⚠️  Jarvis no responde en {API}.")
+        sys.exit(1)
+    info(f"Cerebro: {API} · modelo {MODELO}")
+
+    cargar_historial()
+    stt = cargar_stt()
+    wake = None
+    if not args.teclado and ACTIVACION == "hey":
+        from openwakeword.model import Model
+        from openwakeword.utils import download_models
+
+        download_models(model_names=["hey_jarvis"])
+        wake = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+        info("Activación: di \"Hey Jarvis\"")
+    elif not args.teclado:
+        info(f"Activación: di \"{NOMBRE}\" (ej: \"{NOMBRE}, ¿qué hora es?\")")
+    if VS_VOZ:
+        info(f"Voz: VoiceStudio local ({VS_VOZ}, {VS_MODELO})")
+    elif ELEVEN_KEY and ELEVEN_VOZ:
+        info(f"Voz: ElevenLabs ({ELEVEN_VOZ}, {ELEVEN_MODELO})")
+    else:
+        info(f"Voz: {VOZ}")
+
+    with sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=CHUNK,
+                        callback=_cb, device=dispositivo_mic()):
+        decir(f"{NOMBRE} en línea.")
+        dormido = False
+        threading.Thread(target=vigia, daemon=True).start()
+        print("  Listo. Ctrl+C para salir · cualquier tecla lo calla mientras habla.\n", flush=True)
+        while True:
+            procesar_eventos(wake)
+            if args.teclado:
+                input("  [Enter para hablar] ")
+                vaciar_cola()
+                beep()
+                hubo = turno(stt, wake, espera=8)
+            elif wake is None:
+                # Modo "nombre": escucha cualquier frase y la transcribe
+                audio = grabar_frase(espera_max=3600)
+                if audio is None or len(audio) < SR * 0.4:
+                    continue
+                oido = escuchar_completo(stt, audio)
+                if not oido:
+                    continue
+                dijo, resto = buscar_nombre(oido)
+                if not dijo:
+                    if not dormido:
+                        print(f"  (oí: {oido!r} — sin \"{NOMBRE}\", lo ignoro)", flush=True)
+                    continue
+                if dormido:
+                    if _DESPERTAR.search(resto) or not resto:
+                        dormido = False
+                        info("☀️  Despierto.")
+                        decir("Aquí estoy.")
+                    continue
+                if _DORMIR.search(resto):
+                    dormido = True
+                    info(f"💤 En pausa. Di \"{NOMBRE}, despierta\" para volver.")
+                    decir("Listo, quedo en pausa. Dime despierta cuando me necesites.")
+                    continue
+                if es_parar(resto):
+                    info("(ok)")
+                    beep(440, 0.08)
+                    continue
+                if len(resto) >= 3:
+                    hubo = turno(stt, wake, espera=0, texto_previo=resto)
+                else:
+                    beep()
+                    hubo = turno(stt, wake, espera=6)
+            else:
+                bloque = cola.get()
+                ruido.append(rms(bloque))
+                if max(wake.predict(bloque).values()) < UMBRAL_WAKE:
+                    continue
+                wake.reset()
+                beep()
+                hubo = turno(stt, wake, espera=6)
+            # Modo conversación: puedes seguir hablando unos segundos sin "Hey Jarvis"
+            while hubo and SEGUIMIENTO > 0:
+                beep(660, 0.08)
+                hubo = turno(stt, wake, espera=SEGUIMIENTO)
+            if wake is not None:
+                wake.reset()
+            vaciar_cola()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n  Hasta luego.")
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        raise

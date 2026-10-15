@@ -1,0 +1,24 @@
+# Datos personales (usa las plantillas *.example)
+USER.md
+MEMORY.md
+apodos_proyectos.json
+ajustes.cmd
+recordatorios.json
+voz/historial.json
+
+# Registros, temporales y respaldos
+*.log
+cerebro.iniciado
+cerebro/pruebas/
+tmp/
+respaldo-*/
+*.mp3
+__pycache__/
+*.pyc
+
+# Secretos (nunca se suben)
+.env
+.env.*
+secrets.env
+*.pem
+google_pedro.json
