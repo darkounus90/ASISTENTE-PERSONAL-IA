@@ -215,8 +215,9 @@ def abrir_terminal(proyecto: str, comando: str = "") -> str:
 # ---------------------------------------------------------------- leer archivos (solo lectura)
 _OCULTOS = {".git", "node_modules", ".next", "dist", "build", ".turbo", ".venv", "venv", "__pycache__",
             ".cache", "coverage", ".vercel", ".idea", ".vscode"}
-_SECRETO = re.compile(r"(^\.env(\..*)?$|\.pem$|\.key$|\.p12$|\.pfx$|id_rsa|secrets?\.|credentials?\.|"
-                      r"\.npmrc$|\.netrc$|serviceaccount|service-account|token)", re.IGNORECASE)
+_SECRETO = re.compile(r"(^\.env(?!.*\.(example|sample|template)$)(\..*)?$|\.pem$|\.key$|\.p12$|\.pfx$|^id_rsa|^id_ed25519|"
+                      r"^secrets?\.(env|json|ya?ml|toml)$|^credentials?\.json$|\.npmrc$|\.netrc$|\.pgpass$|"
+                      r"serviceaccount.*\.json$|service-account.*\.json$|google_pedro\.json$|\.git-credentials$)", re.IGNORECASE)
 
 
 def _ruta_proyecto(proyecto: str, ruta: str = "") -> tuple:
@@ -380,7 +381,7 @@ def escribir_en_terminal(ventana: str, texto: str = "", tecla: str = "", enter: 
     if not propia and not confirmado:
         raise ValueError("Esta terminal no la abrí yo. Dile a Andres exactamente qué vas a escribir y en "
                          "qué ventana, espera su 'sí' y vuelve a llamar con confirmado=true.")
-    args = ["-Titulo", ventana]
+    args = ["-Titulo", ventana] + (["-Exacta"] if propia else [])
     if texto:
         args += ["-B64", base64.b64encode(texto.encode("utf-8")).decode("ascii")]
     if tecla:

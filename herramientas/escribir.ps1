@@ -10,7 +10,8 @@ param(
     [string]$Titulo = "",
     [string]$B64 = "",
     [string]$Tecla = "",
-    [switch]$Enter
+    [switch]$Enter,
+    [switch]$Exacta
 )
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -59,7 +60,8 @@ if ($Listar) {
 }
 
 $todas = @(Get-Terminales)
-$candidatas = @($todas | Where-Object { $_.Titulo -like "*$Titulo*" })
+if ($Exacta) { $candidatas = @($todas | Where-Object { $_.Titulo -eq $Titulo }) }
+else { $candidatas = @($todas | Where-Object { $_.Titulo -like "*$Titulo*" }) }
 if ($candidatas.Count -gt 1) {
     $exacta = @($candidatas | Where-Object { $_.Titulo -eq $Titulo })
     if ($exacta.Count -eq 1) { $candidatas = $exacta }
@@ -124,7 +126,7 @@ if ($B64) {
     Start-Sleep -Milliseconds 120
     [System.Windows.Forms.SendKeys]::SendWait("^v")
     Start-Sleep -Milliseconds 400
-    if ($null -ne $anterior) { Set-Clipboard -Value $anterior } else { Set-Clipboard -Value $null }
+    if ($null -ne $anterior -and $anterior -ne "") { Set-Clipboard -Value $anterior }
 }
 
 $mapa = @{ "enter" = "{ENTER}"; "escape" = "{ESC}"; "ctrl+c" = "^c"; "tab" = "{TAB}";
