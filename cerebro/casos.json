@@ -500,5 +500,26 @@
     "listar_terminales"
    ]
   }
+ },
+ {
+  "id": "dolar-hoy",
+  "turnos": [
+   "[voz] ¿En cuánto está el dólar hoy en Colombia?"
+  ],
+  "espera": {
+   "alguna": [
+    "WebSearch",
+    "WebFetch"
+   ]
+  }
+ },
+ {
+  "id": "sin-voseo",
+  "turnos": [
+   "[voz] ¿Me ayudas a revisar algo más tarde?"
+  ],
+  "espera": {
+   "no_voseo": true
+  }
  }
 ]

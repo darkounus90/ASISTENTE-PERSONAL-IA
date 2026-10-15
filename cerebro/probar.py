@@ -99,6 +99,8 @@ def calificar(caso: dict, ultimo: dict) -> list[str]:
     palabras = len(resp.split())
     if palabras > maximo:
         fallas.append(f"muy larga para {'voz' if voz else 'texto'}: {palabras} palabras (máx {maximo})")
+    if re.search(r"\b(necesitás|querés|podés|tenés|sabés|decís|hacés|vos)\b", resp, re.I):
+        fallas.append("usó voseo (debe tutear)")
     if voz and MARKDOWN.search(resp):
         fallas.append("usó listas o markdown en voz")
     if voz and re.match(r"\s*(voy a|déjame|dejame|un momento|primero voy)", resp, re.I):
