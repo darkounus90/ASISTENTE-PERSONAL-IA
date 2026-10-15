@@ -6,12 +6,14 @@ cd /d "%~dp0"
 rem ==== Ajustes (se guardan solos desde el menu) ====
 set "JARVIS_PORT=8787"
 set "JARVIS_API=http://127.0.0.1:%JARVIS_PORT%"
-set "JARVIS_MIC=3"
+set "JARVIS_MIC=auto"
 set "JARVIS_VOZ=es-CO-GonzaloNeural"
 set "JARVIS_AGENTE=orchestrator"
 set "VOICESTUDIO_VOZ="
 set "PEDRO_CEREBRO=nuevo"
 if exist "ajustes.cmd" call "ajustes.cmd"
+rem El microfono se elige por NOMBRE (opcion 5). Los numeros viejos cambian al conectar otro: se ignoran.
+echo %JARVIS_MIC%| findstr /r "^[0-9][0-9]*$" >nul && set "JARVIS_MIC=auto"
 if /i "%~1"=="auto" goto auto
 
 :menu
@@ -37,7 +39,10 @@ echo       [A]  Arrancar Pedro solo al prender el PC (activar/quitar)
 echo       [C]  Cambiar cerebro: %CEREBRO%
 echo       [0]  Salir
 echo.
-if defined VOICESTUDIO_VOZ (echo       Microfono: %JARVIS_MIC%    Voz: VoiceStudio - %VOICESTUDIO_VOZ%) else (echo       Microfono: %JARVIS_MIC%    Voz: %JARVIS_VOZ%)
+set "MICN=automatico (el predeterminado de Windows)"
+if exist "voz\microfono.txt" set /p MICN=<"voz\microfono.txt"
+echo       Microfono: %MICN%
+if defined VOICESTUDIO_VOZ (echo       Voz: VoiceStudio - %VOICESTUDIO_VOZ%) else (echo       Voz: %JARVIS_VOZ%)
 echo.
 set "OP="
 set /p "OP=      Elige una opcion: "
@@ -148,12 +153,8 @@ goto menu
 
 :prueba
 call :encender || goto menu
-powershell -NoProfile -ExecutionPolicy Bypass -File "voz\iniciar-voz.ps1" --microfonos
-echo.
-set "M="
-set /p "M=    Numero del microfono (Enter = dejar %JARVIS_MIC%): "
-if not "%M%"=="" set "JARVIS_MIC=%M%"
-call :guardar
+rem Se guarda por NOMBRE en voz\microfono.txt: no importa si Windows cambia los numeros
+powershell -NoProfile -ExecutionPolicy Bypass -File "voz\iniciar-voz.ps1" --elegir-mic
 echo.
 echo     Ahora habla para ver el nivel del microfono. Ctrl+C para terminar (luego responde N).
 powershell -NoProfile -ExecutionPolicy Bypass -File "voz\iniciar-voz.ps1" --prueba

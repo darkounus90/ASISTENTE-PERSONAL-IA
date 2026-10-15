@@ -147,8 +147,175 @@ def info(msg: str) -> None:
     print(f"  {msg}", flush=True)
 
 
+# ----------------------------------------------------------------- Micrófono (por NOMBRE, no por número)
+# Windows renumera los dispositivos al conectar/desconectar, así que se guarda el NOMBRE en
+# voz/microfono.txt (lo escribe --elegir-mic). JARVIS_MIC=auto (o vacío) = predeterminado de Windows.
+MIC_ARCHIVO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "microfono.txt")
+_ULTIMO_AUDIO = [time.time()]
+_MIC_ACTUAL = ["(sin micrófono)"]
+_ORDEN_API = {"MME": 0, "Windows DirectSound": 1, "Windows WASAPI": 2, "Windows WDM-KS": 3}
+
+
+def _norm_mic(nombre: str) -> str:
+    return re.sub(r"\s+", " ", (nombre or "").strip().lower())
+
+
+def _entradas() -> list:
+    """[(índice, nombre, api)] de los micrófonos que ve Windows."""
+    apis = sd.query_hostapis()
+    out = []
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_input_channels"] >= 1:
+            out.append((i, d["name"], apis[d["hostapi"]]["name"]))
+    return out
+
+
+def _sirve(i) -> bool:
+    try:
+        sd.check_input_settings(device=i, samplerate=SR, channels=1, dtype="int16")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def mic_preferido() -> str:
+    m = (MIC or "").strip()
+    if m and m.lower() not in ("auto", "predeterminado", "default"):
+        return m
+    try:
+        with open(MIC_ARCHIVO, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def resolver_mic() -> tuple:
+    """(dispositivo para sounddevice o None, nombre legible, aviso)."""
+    pref = mic_preferido()
+    aviso = ""
+    if pref.isdigit():                       # compatibilidad con el número viejo
+        i = int(pref)
+        if any(e[0] == i for e in _entradas()) and _sirve(i):
+            return i, sd.query_devices(i)["name"], ""
+        aviso = f"El micrófono número {pref} ya no existe; uso el predeterminado de Windows."
+    elif pref:
+        q = _norm_mic(pref)
+        cands = [e for e in _entradas()
+                 if _norm_mic(e[1]).startswith(q[:31]) or q.startswith(_norm_mic(e[1])) or q in _norm_mic(e[1])]
+        cands.sort(key=lambda e: _ORDEN_API.get(e[2], 9))
+        for i, nombre, _api in cands:
+            if _sirve(i):
+                return i, nombre, ""
+        aviso = f"No encontré el micrófono «{pref}» (¿desconectado?); uso el predeterminado de Windows."
+    try:
+        nombre = sd.query_devices(kind="input")["name"]
+    except Exception:  # noqa: BLE001
+        nombre = "(ninguno)"
+    return None, f"{nombre} (predeterminado de Windows)", aviso
+
+
 def dispositivo_mic():
-    return int(MIC) if MIC and MIC.isdigit() else MIC
+    return resolver_mic()[0]
+
+
+class Microfono:
+    """Abre el micrófono y lo vuelve a abrir solo si se desconecta o cambia."""
+
+    def __init__(self) -> None:
+        self.stream = None
+        self.lock = threading.Lock()
+
+    def abrir(self, refrescar: bool = False) -> None:
+        with self.lock:
+            if self.stream is not None:
+                try:
+                    self.stream.abort()
+                    self.stream.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.stream = None
+            if refrescar:                      # que PortAudio vea micrófonos nuevos o desconectados
+                if rep is not None:
+                    rep.pausar_salida()
+                try:
+                    sd._terminate()
+                    sd._initialize()
+                except Exception:  # noqa: BLE001
+                    pass
+                if rep is not None:
+                    rep.reanudar_salida()
+            disp, nombre, aviso = resolver_mic()
+            if aviso:
+                info(f"⚠️  {aviso}")
+            self.stream = sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=CHUNK,
+                                         callback=_cb, device=disp)
+            self.stream.start()
+            _ULTIMO_AUDIO[0] = time.time()
+            _MIC_ACTUAL[0] = nombre
+            info(f"🎙️  Micrófono: {nombre}")
+
+    def vigilar(self) -> None:
+        """Si dejan de llegar bloques de audio (micrófono desconectado), busca otro."""
+        while True:
+            time.sleep(1.0)
+            if time.time() - _ULTIMO_AUDIO[0] < 3.0:
+                continue
+            info("⚠️  El micrófono dejó de responder (¿se desconectó?). Buscando otro…")
+            try:
+                self.abrir(refrescar=True)
+            except Exception as e:  # noqa: BLE001
+                info(f"   No pude abrir ningún micrófono ({e.__class__.__name__}); reintento en 3 s.")
+                _ULTIMO_AUDIO[0] = time.time()
+
+    def cerrar(self) -> None:
+        with self.lock:
+            if self.stream is not None:
+                try:
+                    self.stream.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.stream = None
+
+
+def elegir_mic() -> None:
+    """Menú para elegir el micrófono; guarda su NOMBRE en voz/microfono.txt."""
+    vistos, lista = set(), []
+    for i, nombre, api in sorted(_entradas(), key=lambda e: _ORDEN_API.get(e[2], 9)):
+        clave = _norm_mic(nombre)[:31]
+        if clave in vistos or "asignador de sonido" in clave or "sound mapper" in clave or not _sirve(i):
+            continue
+        vistos.add(clave)
+        lista.append((i, nombre))
+    try:
+        defecto = sd.query_devices(kind="input")["name"]
+    except Exception:  # noqa: BLE001
+        defecto = "?"
+    actual = mic_preferido() or "automático"
+    print("\n  Micrófonos disponibles:\n")
+    print(f"   [0] Automático: el predeterminado de Windows (ahora: {defecto})")
+    for n, (_i, nombre) in enumerate(lista, 1):
+        print(f"   [{n}] {nombre}")
+    print(f"\n  Actual: {actual}")
+    try:
+        r = input("\n  Número del micrófono (Enter = no cambiar): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not r:
+        return
+    if r == "0":
+        try:
+            os.remove(MIC_ARCHIVO)
+        except OSError:
+            pass
+        print("  Listo: usaré el predeterminado de Windows.")
+        return
+    if r.isdigit() and 1 <= int(r) <= len(lista):
+        nombre = lista[int(r) - 1][1]
+        with open(MIC_ARCHIVO, "w", encoding="utf-8") as f:
+            f.write(nombre)
+        print(f"  Listo: usaré «{nombre}» (por nombre: no importa si Windows cambia los números).")
+    else:
+        print("  Número no válido; no cambié nada.")
 
 
 # ----------------------------------------------------------------- Eventos (recordatorios y resumen)
@@ -391,6 +558,7 @@ cola: "queue.Queue[np.ndarray]" = queue.Queue()
 
 
 def _cb(indata, frames, t, status):  # noqa: ARG001
+    _ULTIMO_AUDIO[0] = time.time()
     cola.put(indata[:, 0].copy())
 
 
@@ -461,6 +629,21 @@ class Reproductor:
         self._stream = sd.OutputStream(samplerate=SR_TTS, channels=1, dtype="int16",
                                        latency="high", blocksize=2048, callback=self._cb)
         self._stream.start()
+
+    def pausar_salida(self) -> None:
+        try:
+            self._stream.abort()
+            self._stream.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def reanudar_salida(self) -> None:
+        try:
+            self._stream = sd.OutputStream(samplerate=SR_TTS, channels=1, dtype="int16",
+                                           latency="high", blocksize=2048, callback=self._cb)
+            self._stream.start()
+        except Exception as e:  # noqa: BLE001
+            info(f"⚠️  No pude reabrir el parlante ({e.__class__.__name__}).")
 
     def _cb(self, outdata, frames, t, status):  # noqa: ARG002
         out = outdata[:, 0]
@@ -958,6 +1141,9 @@ _DESPERTAR = re.compile(r"\b(despierta|despiértate|despiertate|vuelve|activa|ac
                         r"activate|estás ahí|estas ahi)\b", re.IGNORECASE)
 
 
+_PREGUNTA_MIC = re.compile(r"\b(qu[eé]|cu[aá]l)\s+micr[oó]fono|micr[oó]fono\s+(est[aá]s|estas)\s+usando", re.I)
+
+
 def es_parar(texto: str) -> bool:
     return bool(_PARAR.match(texto.strip()))
 
@@ -1171,8 +1357,9 @@ def prueba_mic() -> None:
 
     download_models(model_names=["hey_jarvis"])
     wake = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
-    disp = dispositivo_mic()
-    nombre = sd.query_devices(disp, kind="input")["name"]
+    disp, nombre, aviso = resolver_mic()
+    if aviso:
+        print(f"\n  ⚠️  {aviso}")
     print(f"\n  Micrófono: {nombre}")
     print("  Habla normal y luego di 'Hey Jarvis' varias veces. Ctrl+C para salir.\n")
     pico = 0.0
@@ -1194,6 +1381,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Voz de Jarvis")
     ap.add_argument("--teclado", action="store_true", help="Enter para hablar, sin 'Hey Jarvis'")
     ap.add_argument("--microfonos", action="store_true", help="Lista micrófonos y sale")
+    ap.add_argument("--elegir-mic", action="store_true", help="Elige el micrófono (se guarda por nombre)")
     ap.add_argument("--voces", action="store_true", help="Escucha varias voces para elegir")
     ap.add_argument("--prueba", action="store_true", help="Medidor en vivo de micrófono y 'Hey Jarvis'")
     args = ap.parse_args()
@@ -1201,6 +1389,10 @@ def main() -> None:
     if args.microfonos:
         print(sd.query_devices())
         print("\n  Micrófono por defecto:", sd.query_devices(kind="input")["name"])
+        print("  Pedro usará:", resolver_mic()[1])
+        return
+    if args.elegir_mic:
+        elegir_mic()
         return
     if args.prueba:
         prueba_mic()
@@ -1236,8 +1428,10 @@ def main() -> None:
     else:
         info(f"Voz: {VOZ}")
 
-    with sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=CHUNK,
-                        callback=_cb, device=dispositivo_mic()):
+    mic = Microfono()
+    mic.abrir()
+    threading.Thread(target=mic.vigilar, daemon=True).start()
+    if True:
         atexit.register(_al_salir)
         _avisar_cierre_consola()
         decir(f"{NOMBRE} en línea.")
@@ -1286,6 +1480,10 @@ def main() -> None:
                     _DORMIDO[0] = True
                     info(f"💤 En pausa. Di \"{NOMBRE}, despierta\" para volver.")
                     decir("Listo, quedo en pausa. Dime despierta cuando me necesites.")
+                    continue
+                if _PREGUNTA_MIC.search(resto):
+                    info(f"🎙️  Micrófono: {_MIC_ACTUAL[0]}")
+                    decir(f"Estoy usando {_MIC_ACTUAL[0].replace('(predeterminado de Windows)', ', el predeterminado de Windows')}.")
                     continue
                 if es_parar(resto):
                     info("(ok)")

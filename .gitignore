@@ -28,3 +28,4 @@ secrets.env
 google_pedro.json
 rutinas.json
 hud/posicion.json
+voz/microfono.txt
