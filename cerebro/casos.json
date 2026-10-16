@@ -104,7 +104,7 @@
    ],
    "entrada": {
     "escribir_en_terminal": [
-     "pedro-prueba2",
+     "orion-prueba2",
      "whatsapp"
     ]
    },
@@ -525,7 +525,7 @@
  {
   "id": "camara-mirame",
   "turnos": [
-   "[voz] Pedro, mírame, ¿cómo me veo?"
+   "[voz] Orión, mírame, ¿cómo me veo?"
   ],
   "espera": {
    "alguna": [

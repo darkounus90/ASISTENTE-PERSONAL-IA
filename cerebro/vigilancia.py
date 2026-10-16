@@ -1,4 +1,4 @@
-"""Vigilancia proactiva de Pedro: corre dentro del bucle asyncio del cerebro.
+"""Vigilancia proactiva de Orión: corre dentro del bucle asyncio del cerebro.
 
 Cada `intervalo_min` revisa:
   - sitios web (GET; caído = HTTP >= 500, sin conexión o timeout; aviso tras 2 fallos seguidos),
@@ -394,7 +394,7 @@ class Vigilante:
 
         if self._sesion is None or self._sesion.closed:
             self._sesion = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=TIMEOUT),
-                                                 headers={"User-Agent": "Pedro-vigilancia/1.0"},
+                                                 headers={"User-Agent": "Orion-vigilancia/1.0"},
                                                  trust_env=True)
         try:
             async with self._sesion.request(metodo, url, headers=headers, json=cuerpo_json,
@@ -1043,12 +1043,12 @@ async def detener() -> None:
 
 # ------------------------------------------------------------------ servidor MCP (en proceso)
 DESC_ESTADO = (
-    "VIGILANCIA: estado de lo que Pedro vigila en segundo plano: sitios web (arriba/caídos y desde "
+    "VIGILANCIA: estado de lo que Orión vigila en segundo plano: sitios web (arriba/caídos y desde "
     "cuándo), último deploy por proyecto de Vercel, último CI por repo de GitHub, Railway, tareas de "
     "Claude Code en curso/terminadas, qué integraciones faltan por configurar y cuántos avisos hay sin "
     "leer. Úsala para '¿cómo está todo?', '¿se cayó algo?', '¿cómo van los deploys?'.")
 DESC_VIGILAR = (
-    "Agrega (o actualiza) un sitio web a la vigilancia: Pedro lo revisa cada pocos minutos y avisa "
+    "Agrega (o actualiza) un sitio web a la vigilancia: Orión lo revisa cada pocos minutos y avisa "
     "si se cae y cuando vuelve. Solo https. Confirma con Andres el nombre y la dirección.")
 DESC_DEJAR = "Quita un sitio web de la vigilancia (por su nombre)."
 ESQUEMA_ESTADO = {"type": "object", "properties": {}}

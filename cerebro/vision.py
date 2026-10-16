@@ -1,4 +1,4 @@
-"""Visión de Pedro: captura de pantalla y foto de la cámara, hechas en Python dentro del cerebro (Windows).
+"""Visión de Orión: captura de pantalla y foto de la cámara, hechas en Python dentro del cerebro (Windows).
 
 Antes se hacía con un script de PowerShell, pero Windows Defender lo bloquea por
 "capturar la pantalla desde un script". Aquí se usa `mss` (la misma técnica que usan
@@ -36,7 +36,7 @@ ESQUEMA_CAMARA = {"type": "object", "properties": {
     "camara": {"type": "integer", "minimum": 0, "maximum": 9,
                "description": "Índice de la cámara (0 = la principal)"}}}
 CAMARA_CALENTAR = 10          # cuadros descartados para que la exposición y el balance se acomoden
-CAMARA_ESPERA_MAX = 25.0      # segundos; si la cámara se cuelga, Pedro responde con error
+CAMARA_ESPERA_MAX = 25.0      # segundos; si la cámara se cuelga, Orión responde con error
 _camara_en_uso = threading.Lock()
 
 

@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["httpx>=0.27"]
 # ///
-"""Chat por texto con Pedro (usa el mismo cerebro que la voz)."""
+"""Chat por texto con Orión (usa el mismo cerebro que la voz)."""
 import json
 import os
 import sys
@@ -11,7 +11,7 @@ import httpx
 
 API = os.environ.get("JARVIS_API", "http://127.0.0.1:8787")
 historial = []
-print("── Pedro · chat por texto ── (escribe 'salir' para terminar)\n")
+print("── Orión · chat por texto ── (escribe 'salir' para terminar)\n")
 while True:
     try:
         texto = input("Tú: ").strip()
@@ -22,7 +22,7 @@ while True:
     if texto.lower() in ("salir", "exit", "quit"):
         break
     historial.append({"role": "user", "content": texto})
-    print("Pedro: ", end="", flush=True)
+    print("Orión: ", end="", flush=True)
     respuesta = ""
     try:
         with httpx.stream("POST", f"{API}/v1/chat/completions",

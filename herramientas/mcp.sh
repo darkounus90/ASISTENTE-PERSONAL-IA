@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lanza un servidor MCP de Pedro dentro de WSL (lo llama el cerebro desde Windows).
+# Lanza un servidor MCP de Orión dentro de WSL (lo llama el cerebro desde Windows).
 # Uso: bash mcp.sh herramientas/pc_mcp.py
 set -e
 PY="$HOME/.openjarvis/.venv/bin/python"

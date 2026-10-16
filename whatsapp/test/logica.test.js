@@ -31,7 +31,7 @@ const YO_LID = '98765432101234@lid';
 const USUARIO = { id: '573001112233:17@s.whatsapp.net', lid: '98765432101234:17@lid', name: 'Andres' };
 const PROPIOS = jidsPropios(USUARIO);
 
-function mensaje({ remoteJid = YO_PN, fromMe = true, participant, id = 'ABC123', ts = SEG - 5, message = { conversation: 'hola Pedro' } } = {}) {
+function mensaje({ remoteJid = YO_PN, fromMe = true, participant, id = 'ABC123', ts = SEG - 5, message = { conversation: 'hola Orión' } } = {}) {
   return { key: { remoteJid, fromMe, id, ...(participant ? { participant } : {}) }, messageTimestamp: ts, message };
 }
 
@@ -119,7 +119,7 @@ describe('clasificar', () => {
   it('texto en tu chat -> texto', () => {
     const c = clasificar(mensaje(), ctx());
     assert.equal(c.accion, 'texto');
-    assert.equal(c.texto, 'hola Pedro');
+    assert.equal(c.texto, 'hola Orión');
     assert.equal(c.reenviado, false);
   });
 
@@ -145,11 +145,11 @@ describe('clasificar', () => {
   it('ignora sus propias respuestas por prefijo', () => {
     const c = clasificar(mensaje({ message: { conversation: `${PREFIJO} ya quedó` } }), ctx());
     assert.equal(c.accion, 'ignorar');
-    assert.equal(c.razon, 'respuesta de Pedro');
+    assert.equal(c.razon, 'respuesta de Orión');
     assert.equal(clasificar(mensaje({ message: { conversation: `  ${PREFIJO} (1/2) parte` } }), ctx()).accion, 'ignorar');
   });
 
-  it('ignora ids que mandó Pedro aunque no tengan prefijo', () => {
+  it('ignora ids que mandó Orión aunque no tengan prefijo', () => {
     const enviados = new ConjuntoLimitado(10).add('ABC123');
     assert.equal(clasificar(mensaje(), ctx({ enviados })).accion, 'ignorar');
   });
@@ -218,7 +218,7 @@ describe('historial', () => {
     assert.equal(r.at(-1).content, 'm24');
   });
 
-  it('si el recorte deja a Pedro de primero, lo quita', () => {
+  it('si el recorte deja a Orión de primero, lo quita', () => {
     const r = recortarHistorial(turnos(12), 10); // m2..m11 empieza en user
     assert.equal(r[0].content, 'm2');
     const r2 = recortarHistorial(turnos(11), 10); // m1 (assistant) se descarta
@@ -247,7 +247,7 @@ describe('trozos y formato', () => {
   });
 
   it('texto largo: todos los trozos <= 3500, con prefijo y sin perder palabras', () => {
-    const parrafo = 'Esta es una frase de prueba para Pedro. '.repeat(40);
+    const parrafo = 'Esta es una frase de prueba para Orión. '.repeat(40);
     const texto = Array.from({ length: 8 }, () => parrafo.trim()).join('\n\n');
     const r = armarRespuesta(texto);
     assert.ok(r.length > 1);
@@ -255,7 +255,7 @@ describe('trozos y formato', () => {
       assert.ok(t.length <= MAX_TROZO, `trozo ${i} mide ${t.length}`);
       assert.ok(t.startsWith(`${PREFIJO} (${i + 1}/${r.length}) `));
     }
-    const unido = r.map((t) => t.replace(/^🤖 Pedro: \(\d+\/\d+\) /, '')).join(' ');
+    const unido = r.map((t) => t.replace(/^🤖 Orión: \(\d+\/\d+\) /, '')).join(' ');
     assert.equal(unido.split(/\s+/).length, texto.split(/\s+/).length);
   });
 

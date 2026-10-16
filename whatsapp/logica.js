@@ -1,8 +1,8 @@
-// Lógica pura de "Pedro por WhatsApp" (sin conexión a WhatsApp, sin red, sin disco).
+// Lógica pura de "Orión por WhatsApp" (sin conexión a WhatsApp, sin red, sin disco).
 // Todo lo que decide QUÉ mensajes se atienden y CÓMO se arma la respuesta vive aquí
 // para poder probarlo con `node --test`.
 
-export const PREFIJO = '🤖 Pedro:';
+export const PREFIJO = '🤖 Orión:';
 export const MARCA_WHATSAPP = '[whatsapp] ';
 export const MAX_TROZO = 3500;
 export const MAX_EDAD_MS = 2 * 60 * 1000;
@@ -123,7 +123,8 @@ export function esViejo(messageTimestamp, ahoraMs, maxEdadMs = MAX_EDAD_MS) {
 }
 
 export function esRespuestaDePedro(texto) {
-  return typeof texto === 'string' && texto.trimStart().startsWith('🤖 Pedro');
+  // También el prefijo viejo ("🤖 Pedro"): mensajes de antes del cambio de nombre.
+  return typeof texto === 'string' && /^🤖 (Orión|Orion|Pedro)\b/u.test(texto.trimStart());
 }
 
 /**
@@ -139,7 +140,7 @@ export function clasificar(msg, { propios, enviados = new Set(), ahoraMs = Date.
   const key = msg?.key;
   if (!key) return ignorar('sin llave');
   if (!esChatPropio(key, propios)) return ignorar('no es tu chat contigo mismo');
-  if (key.id && enviados.has(key.id)) return ignorar('eco de un mensaje que mandó Pedro');
+  if (key.id && enviados.has(key.id)) return ignorar('eco de un mensaje que mandó Orión');
   if (esViejo(msg.messageTimestamp, ahoraMs, maxEdadMs)) return ignorar('mensaje viejo');
 
   const m = desenvolver(msg.message);
@@ -151,7 +152,7 @@ export function clasificar(msg, { propios, enviados = new Set(), ahoraMs = Date.
 
   const texto = m.conversation ?? m.extendedTextMessage?.text;
   if (typeof texto === 'string') {
-    if (esRespuestaDePedro(texto)) return ignorar('respuesta de Pedro');
+    if (esRespuestaDePedro(texto)) return ignorar('respuesta de Orión');
     if (!texto.trim()) return ignorar('texto vacío');
     const reenviado = Boolean(m.extendedTextMessage?.contextInfo?.isForwarded);
     return { accion: 'texto', texto: texto.trim(), reenviado, razon: 'texto' };
@@ -167,12 +168,12 @@ export function clasificar(msg, { propios, enviados = new Set(), ahoraMs = Date.
   }
   if (m.imageMessage) {
     const caption = m.imageMessage.caption || '';
-    if (esRespuestaDePedro(caption)) return ignorar('respuesta de Pedro');
+    if (esRespuestaDePedro(caption)) return ignorar('respuesta de Orión');
     return { accion: 'imagen', texto: caption, razon: 'imagen' };
   }
   if (m.videoMessage || m.documentMessage || m.locationMessage || m.contactMessage || m.contactsArrayMessage) {
     const caption = m.videoMessage?.caption || m.documentMessage?.caption || '';
-    if (esRespuestaDePedro(caption)) return ignorar('respuesta de Pedro');
+    if (esRespuestaDePedro(caption)) return ignorar('respuesta de Orión');
     return { accion: 'no_soportado', razon: Object.keys(m)[0] };
   }
   return ignorar(`tipo sin manejar (${Object.keys(m).join(',') || 'vacío'})`);
@@ -190,7 +191,7 @@ export function textoParaCerebro(texto, { reenviado = false, notaDeVoz = false }
 
 /**
  * Deja solo los últimos `max` mensajes válidos (user/assistant con texto) y
- * hace que el primero sea del usuario (un historial no debe empezar con Pedro).
+ * hace que el primero sea del usuario (un historial no debe empezar con Orión).
  */
 export function recortarHistorial(historial, max = MAX_TURNOS) {
   const validos = (Array.isArray(historial) ? historial : [])
@@ -255,7 +256,7 @@ export function dividirEnTrozos(texto, max = MAX_TROZO) {
 }
 
 /**
- * Respuesta lista para mandar: cada trozo empieza con "🤖 Pedro:" (así nunca se
+ * Respuesta lista para mandar: cada trozo empieza con "🤖 Orión:" (así nunca se
  * responde a sí mismo) y ninguno pasa de `max` caracteres contando el prefijo.
  */
 export function armarRespuesta(texto, max = MAX_TROZO) {

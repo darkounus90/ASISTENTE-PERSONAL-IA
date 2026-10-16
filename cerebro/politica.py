@@ -1,4 +1,4 @@
-"""Política de permisos de Pedro: decide POR CÓDIGO qué hace solo, qué necesita el
+"""Política de permisos de Orión: decide POR CÓDIGO qué hace solo, qué necesita el
 "sí" de Andres y qué nunca hace. El modelo no tiene que recordarlo: si intenta algo
 que requiere confirmación, la herramienta se bloquea con un mensaje que le dice que
 pregunte; cuando Andres responde "sí", ESA acción exacta queda aprobada una vez.
@@ -115,7 +115,7 @@ _WEB_RIESGO = re.compile(
     r"enviar|send|submit|comprar|buy|pagar|pay|checkout|publicar|post\b|publish|eliminar|borrar|delete|"
     r"remove|confirmar|confirm|aceptar|accept|suscrib|subscribe|transfer|ordenar|order|reservar|book|"
     r"registr|sign\s?up|log\s?out|cerrar sesi", re.I)
-_TITULO_PROPIO = re.compile(r"^pedro-[\w .()-]{1,70}$", re.I)
+_TITULO_PROPIO = re.compile(r"^(pedro|orion|orión)-[\w .()-]{1,70}$", re.I)   # pedro- = ventanas viejas
 
 # Un "sí" claro: frase corta que empieza con una afirmación y no trae ninguna duda ni condición.
 _AFIRMACION = re.compile(
@@ -135,7 +135,7 @@ def _base(nombre: str) -> str:
 def es_afirmativo(texto: str) -> bool:
     t = re.sub(r"^\s*(\[voz\]\s*)?(\([^)]*\)\s*)*", "", texto or "")
     t = re.sub(r"\(hora local:[^)]*\)", "", t)
-    t = re.sub(r"^(pedro|oye pedro)[\s,.:!]*", "", t.strip(), flags=re.I).strip()
+    t = re.sub(r"^((oye|hey|ey)\s+)?(pedro|ori[oó]n)[\s,.:!]*", "", t.strip(), flags=re.I).strip()
     if not t or len(t.split()) > 8 or not _AFIRMACION.match(t):
         return False
     m = _AFIRMACION.match(t)
@@ -186,7 +186,7 @@ def clasificar(herramienta: str, entrada: dict, texto_turno: str = "") -> tuple[
             return PROHIBIDO, "escribir un comando destructivo o que expone secretos"
         if not _TITULO_PROPIO.match(ventana):
             return CONFIRMAR, f"escribir «{texto[:80]}» en la terminal «{ventana}», que no abriste tú"
-        if ventana.lower().startswith("pedro-dev-") and texto:
+        if re.match(r"(pedro|orion|orión)-dev-", ventana.lower()) and texto:
             # es una consola: lo que escribes ahí es un comando y sigue la misma lista blanca
             if not (_bash_seguro(texto) or _B_SERVIDOR.search(texto)):
                 return CONFIRMAR, f"correr «{texto[:120]}» en la terminal {ventana}"
@@ -336,11 +336,11 @@ if __name__ == "__main__":
         ("Edit", {"file_path": "C:\\Users\\PC\\Documents\\jarvis\\MEMORY.md"}, LIBRE),
         ("Edit", {"file_path": "C:\\dev\\x\\src\\app.tsx"}, CONFIRMAR),
         # terminales
-        ("mcp__pc__escribir_en_terminal", {"ventana": "Pedro-prueba2", "texto": "agrega un botón"}, LIBRE),
-        ("mcp__pc__escribir_en_terminal", {"ventana": "Pedro-dev-prueba2", "texto": "git status"}, LIBRE),
-        ("mcp__pc__escribir_en_terminal", {"ventana": "Pedro-dev-prueba2", "texto": "npm run dev"}, LIBRE),
-        ("mcp__pc__escribir_en_terminal", {"ventana": "Pedro-dev-prueba2", "texto": "git push"}, CONFIRMAR),
-        ("mcp__pc__escribir_en_terminal", {"ventana": "Pedro-dev-prueba2", "texto": "cat .env"}, PROHIBIDO),
+        ("mcp__pc__escribir_en_terminal", {"ventana": "Orion-prueba2", "texto": "agrega un botón"}, LIBRE),
+        ("mcp__pc__escribir_en_terminal", {"ventana": "Orion-dev-prueba2", "texto": "git status"}, LIBRE),
+        ("mcp__pc__escribir_en_terminal", {"ventana": "Orion-dev-prueba2", "texto": "npm run dev"}, LIBRE),
+        ("mcp__pc__escribir_en_terminal", {"ventana": "Orion-dev-prueba2", "texto": "git push"}, CONFIRMAR),
+        ("mcp__pc__escribir_en_terminal", {"ventana": "Orion-dev-prueba2", "texto": "cat .env"}, PROHIBIDO),
         ("mcp__pc__escribir_en_terminal", {"ventana": "PowerShell", "texto": "x"}, CONFIRMAR),
         ("mcp__pc__abrir_terminal", {"proyecto": "x", "comando": "npm run dev"}, LIBRE),
         ("mcp__google__crear_evento", {}, CONFIRMAR),
@@ -362,7 +362,7 @@ if __name__ == "__main__":
         if cat != esperado:
             mal += 1
             print(f"FALLA {h} {e} -> {cat} (esperado {esperado})")
-    afirm = [("[voz] sí, dale", True), ("[voz] Pedro, hazlo", True), ("[voz] sí", True), ("[voz] dale", True),
+    afirm = [("[voz] sí, dale", True), ("[voz] Orión, hazlo", True), ("[voz] sí", True), ("[voz] dale", True),
              ("[voz] te doy permiso", True), ("[voz] (te interrumpí mientras hablabas) dale", True),
              ("[voz] ok", True), ("[voz] listo", True), ("[voz] ok, dale", True), ("[voz] confirmo", True),
              ("[voz] no, espera", False), ("[voz] ¿qué hora es?", False), ("[voz] no sé", False),
@@ -388,7 +388,7 @@ if __name__ == "__main__":
     assert p.decidir("Read", {"file_path": "a.ts"})[0] is True
     assert p.decidir("mcp__pc__abrir_terminal", {"proyecto": "x"})[0] is False   # simulado
     assert p.decidir("Bash", {"command": "git status"})[0] is True             # lectura real en prueba
-    assert clasificar("mcp__vision__ver_camara", {}, "[voz] Pedro, mírame")[0] == LIBRE
+    assert clasificar("mcp__vision__ver_camara", {}, "[voz] Orión, mírame")[0] == LIBRE
     assert clasificar("mcp__vision__ver_camara", {}, "[voz] ¿qué tengo en la mano?")[0] == LIBRE
     assert clasificar("mcp__vision__ver_camara", {}, "[voz] ¿qué hora es?")[0] == CONFIRMAR
     print("politica: OK" if not mal else f"politica: {mal} fallas")

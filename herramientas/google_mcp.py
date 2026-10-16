@@ -1,4 +1,4 @@
-"""Servidor MCP (stdio) para que Pedro lea Gmail y use Google Calendar.
+"""Servidor MCP (stdio) para que Orión lea Gmail y use Google Calendar.
 
 Herramientas:
   correos_recientes(consulta, maximo)  -> lista compacta de correos (con id)
@@ -39,9 +39,9 @@ GMAIL = (_BASE or "https://gmail.googleapis.com") + "/gmail/v1/users/me"
 CALENDAR = (_BASE or "https://www.googleapis.com") + "/calendar/v3/calendars/primary"
 TOKEN_URL = os.environ.get("PEDRO_GOOGLE_TOKEN_URL", "https://oauth2.googleapis.com/token")
 
-NO_CONECTADO = ("Gmail/Calendar no está conectado. En el menú de Pedro usa la opción "
+NO_CONECTADO = ("Gmail/Calendar no está conectado. En el menú de Orión usa la opción "
                 "'Conectar Google'.")
-REVOCADO = ("El acceso de Pedro a Google expiró o fue revocado. En el menú de Pedro usa "
+REVOCADO = ("El acceso de Orión a Google expiró o fue revocado. En el menú de Orión usa "
             "la opción 'Conectar Google' otra vez.")
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]

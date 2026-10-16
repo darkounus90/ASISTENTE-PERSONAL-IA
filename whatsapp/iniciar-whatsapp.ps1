@@ -1,9 +1,9 @@
-﻿# Pedro por WhatsApp (Windows)
-# Pedro responde SOLO en tu chat "Mensajes para ti mismo". Nunca le escribe a nadie más.
+﻿# Orión por WhatsApp (Windows)
+# Orión responde SOLO en tu chat "Mensajes para ti mismo". Nunca le escribe a nadie más.
 # Ejecutar (no hace falta administrador):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File whatsapp\iniciar-whatsapp.ps1
 
-$Host.UI.RawUI.WindowTitle = "Pedro - WhatsApp (no cerrar)"
+$Host.UI.RawUI.WindowTitle = "Orión - WhatsApp (no cerrar)"
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
@@ -28,7 +28,7 @@ $mayor = 0
 [void][int]::TryParse(($version -replace '^v', '').Split('.')[0], [ref]$mayor)
 if ($mayor -lt 20) {
     Write-Host ""
-    Write-Host "Tienes Node.js $version y Pedro por WhatsApp necesita la version 20 o mas nueva." -ForegroundColor Yellow
+    Write-Host "Tienes Node.js $version y Orión por WhatsApp necesita la version 20 o mas nueva." -ForegroundColor Yellow
     Write-Host "Actualiza Node.js LTS (opcion 8 de Jarvis.bat o: winget upgrade OpenJS.NodeJS.LTS)."
     Salir 1
 }
@@ -40,7 +40,7 @@ if (-not $hayQueInstalar) {
     $hayQueInstalar = (Get-Item "package.json").LastWriteTime -gt (Get-Item $marca).LastWriteTime
 }
 if ($hayQueInstalar) {
-    Write-Host "Instalando dependencias de Pedro por WhatsApp (una sola vez, 1-2 minutos)..." -ForegroundColor Cyan
+    Write-Host "Instalando dependencias de Orión por WhatsApp (una sola vez, 1-2 minutos)..." -ForegroundColor Cyan
     & npm.cmd install --no-fund --no-audit
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
@@ -60,7 +60,7 @@ while ($true) {
             Write-Host ""
             Write-Host "La sesion de WhatsApp se cerro. Para vincular de nuevo:" -ForegroundColor Yellow
             Write-Host "  1. Borra la carpeta $env:USERPROFILE\.pedro\whatsapp-auth"
-            Write-Host "  2. Vuelve a iniciar Pedro por WhatsApp y escanea el codigo QR."
+            Write-Host "  2. Vuelve a iniciar Orión por WhatsApp y escanea el codigo QR."
             Salir 2
         }
         3 { Salir 3 }
@@ -69,9 +69,9 @@ while ($true) {
     $intentos++
     if ($intentos -ge 5) {
         Write-Host ""
-        Write-Host "Pedro por WhatsApp se cayo $intentos veces seguidas (codigo $codigo). Lo dejo apagado." -ForegroundColor Red
+        Write-Host "Orión por WhatsApp se cayo $intentos veces seguidas (codigo $codigo). Lo dejo apagado." -ForegroundColor Red
         Salir $codigo
     }
-    Write-Host "Pedro por WhatsApp se detuvo (codigo $codigo). Reintento en 15 segundos..." -ForegroundColor Yellow
+    Write-Host "Orión por WhatsApp se detuvo (codigo $codigo). Reintento en 15 segundos..." -ForegroundColor Yellow
     Start-Sleep -Seconds 15
 }

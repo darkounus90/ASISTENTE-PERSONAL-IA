@@ -31,7 +31,7 @@ def prueba_sin_conexion():
     assert interpretar("basura", AHORA).clave == "sin_conexion"           # JSON que no es objeto
     assert interpretar([], AHORA).clave == "sin_conexion"
     v = interpretar({"estado": "apagado", "usuario": "a", "pedro": "b", "t": AHORA}, AHORA)
-    assert v.clave == "sin_conexion" and v.detalle == "Pedro está apagado" and v.pedro == "b"
+    assert v.clave == "sin_conexion" and v.detalle == "Orión está apagado" and v.pedro == "b"
     assert interpretar({}, AHORA).clave == "sin_conexion"                 # sin estado
     # viejo: más de 30 s sin señal
     v = interpretar({"estado": "escuchando", "t": AHORA - 31}, AHORA)

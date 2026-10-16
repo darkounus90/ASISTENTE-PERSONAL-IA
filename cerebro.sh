@@ -16,12 +16,12 @@ W=/mnt/c/Users/PC/Documents/jarvis
 for f in SOUL.md USER.md; do
   [ -f "$W/$f" ] && cp "$W/$f" "$HOME/.openjarvis/$f" && echo "persona: $f actualizado"
 done
-# MEMORY.md: gana el más reciente (Pedro escribe aquí con "recuerda que…"; tú lo editas en Windows)
+# MEMORY.md: gana el más reciente (Orión escribe aquí con "recuerda que…"; tú lo editas en Windows)
 if [ -f "$W/MEMORY.md" ] && [ -f "$HOME/.openjarvis/MEMORY.md" ]; then
   if [ "$HOME/.openjarvis/MEMORY.md" -nt "$W/MEMORY.md" ]; then
-    cp "$HOME/.openjarvis/MEMORY.md" "$W/MEMORY.md" && echo "memoria: MEMORY.md de Pedro -> Windows"
+    cp "$HOME/.openjarvis/MEMORY.md" "$W/MEMORY.md" && echo "memoria: MEMORY.md de Orión -> Windows"
   else
-    cp "$W/MEMORY.md" "$HOME/.openjarvis/MEMORY.md" && echo "memoria: MEMORY.md de Windows -> Pedro"
+    cp "$W/MEMORY.md" "$HOME/.openjarvis/MEMORY.md" && echo "memoria: MEMORY.md de Windows -> Orión"
   fi
 elif [ -f "$W/MEMORY.md" ]; then
   cp "$W/MEMORY.md" "$HOME/.openjarvis/MEMORY.md"

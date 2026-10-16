@@ -10,14 +10,14 @@
 #   "faster-whisper>=1.0",
 # ]
 # ///
-"""Cerebro de Pedro sobre el motor de Claude Code (Claude Agent SDK).
+"""Cerebro de Orión sobre el motor de Claude Code (Claude Agent SDK).
 
 Corre en Windows y expone en 127.0.0.1:8787 la misma API que usaba el cliente de voz
 (/v1/chat/completions con streaming estilo OpenAI y /health), así que voz.py no cambia.
 
 - Una sesión de Claude Code persistente (se retoma al reiniciar si tiene menos de 8 h).
 - Herramientas de Claude Code: Bash, Read, Grep, Glob, Edit, WebFetch…
-- Herramientas propias de Pedro (pc, grafo, google, claude-code, comet) como servidores MCP
+- Herramientas propias de Orión (pc, grafo, google, claude-code, comet) como servidores MCP
   que corren en WSL vía herramientas/mcp.sh.
 - Permisos decididos por código en politica.py (no por el prompt).
 - Modo prueba (cabecera X-Pedro-Prueba: 1): sesión aparte y acciones simuladas.
@@ -175,7 +175,7 @@ def prompt_sistema() -> str:
               f"# Tu memoria ({JARVIS / 'MEMORY.md'})\n" + _leer("MEMORY.md")]
     if apodos:
         partes.append("# Apodos de proyectos (lo que dice Andres → carpeta en C:\\dev)\n" + apodos)
-    partes.append(f"# Entorno\n- Proyectos: {DEV}. Grafo de Obsidian: {GRAFO}. Archivos de Pedro: {JARVIS}.\n"
+    partes.append(f"# Entorno\n- Proyectos: {DEV}. Grafo de Obsidian: {GRAFO}. Archivos de Orión: {JARVIS}.\n"
                   "- Bash corre en Git Bash de Windows: usa rutas como /c/dev/proyecto.\n"
                   "- Cada mensaje trae al final la hora local de Andres entre paréntesis.")
     return "\n\n".join(p for p in partes if p)
@@ -615,7 +615,7 @@ def crear_app():
             ruta = f.name
         try:
             partes, _ = stt["modelo"].transcribe(ruta, language="es", vad_filter=True,
-                                                 initial_prompt="Pedro, Claude Code, Onnyx, CHECK, 18 Kilates.")
+                                                 initial_prompt="Orión, Claude Code, Onnyx, CHECK, 18 Kilates.")
             return " ".join(p.text.strip() for p in partes).strip()
         finally:
             try:
@@ -663,7 +663,7 @@ def main() -> None:
                          "CLAUDE_CONFIG_DIR")) and k != "CLAUDE_CODE_GIT_BASH_PATH":
             os.environ.pop(k, None)
     secretos = cargar_secretos()
-    info("── Pedro · cerebro (motor de Claude Code) ──")
+    info("── Orión · cerebro (motor de Claude Code) ──")
     info(f"modelo {MODELO} · gateway {secretos.get('ANTHROPIC_BASE_URL', 'api.anthropic.com')} · "
          f"clave {'OK' if secretos.get('ANTHROPIC_API_KEY') or secretos.get('ANTHROPIC_AUTH_TOKEN') else 'FALTA'}")
     info(f"herramientas propias: {', '.join(servidores_mcp()) or 'ninguna'} · Git Bash: {bash_de_git() or 'NO encontrado'}")

@@ -2,7 +2,7 @@
   "name": "pedro-whatsapp",
   "version": "1.0.0",
   "private": true,
-  "description": "Pedro por WhatsApp: responde solo en tu chat 'Mensajes para ti mismo'",
+  "description": "Orión por WhatsApp: responde solo en tu chat 'Mensajes para ti mismo'",
   "type": "module",
   "main": "pedro-whatsapp.js",
   "engines": {

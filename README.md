@@ -1,6 +1,6 @@
-# Pedro — asistente personal por voz
+# Orión — asistente personal por voz
 
-Asistente personal tipo JARVIS para Windows: lo activas diciendo **"Pedro, …"**, te responde con voz y trabaja en tu PC con el motor de **Claude Code** (Claude Agent SDK).
+Asistente personal tipo JARVIS para Windows: lo activas diciendo **"Orión, …"**, te responde con voz y trabaja en tu PC con el motor de **Claude Code** (Claude Agent SDK).
 
 ## Qué puede hacer
 - **Voz**: escucha con Whisper (local), habla con voces de Microsoft (gratis, ej. `es-CO-GonzaloNeural`). Lo puedes interrumpir hablando.
@@ -14,7 +14,7 @@ Asistente personal tipo JARVIS para Windows: lo activas diciendo **"Pedro, …"*
 - **Memoria**: recuerda lo que le cuentas en `MEMORY.md` y retoma la conversación.
 - **Proactivo (vigilancia)**: vigila tus sitios, deploys de Vercel/Railway, GitHub Actions y tareas de Claude Code, y te avisa por voz solo cuando algo cambia (`vigilancia.json`, tokens en `secrets.env`).
 - **Informe de la mañana**: agenda, correos importantes, estado de producción, recordatorios y cambios sin subir.
-- **Atajo global** `Ctrl+Alt+P`: te escucha sin decir "Pedro" (y lo calla si está hablando).
+- **Atajo global** `Ctrl+Alt+P`: te escucha sin decir "Orión" (y lo calla si está hablando).
 - **Rutinas por voz** ("modo trabajo", "modo reunión", "fin del día") y **control del PC** (volumen, música, bloquear, apagar con tu sí).
 - **Panel tipo JARVIS** (HUD) en una esquina: estado, lo que entendió y lo que responde, y los avisos.
 - **Cámara**: "mírame", "¿qué tengo en la mano?" (solo se enciende si se lo pides en ese mensaje).
@@ -37,10 +37,10 @@ Lo que lee en webs, correos, terminales o la pantalla lo trata como datos, nunca
 | `voz/` | Cliente de voz (micrófono, Whisper, TTS, interrupciones, recordatorios) |
 | `herramientas/` | Servidores MCP: PC y terminales, visión, grafo, Google, Claude Code |
 | `hud/` | Panel tipo JARVIS (tkinter) |
-| `whatsapp/` | Pedro por WhatsApp (Baileys, solo tu chat contigo mismo) |
+| `whatsapp/` | Orión por WhatsApp (Baileys, solo tu chat contigo mismo) |
 | `tools/` | Arranque automático con Windows |
 | `rutinas.example.json`, `vigilancia.example.json` | Plantillas de rutinas y de vigilancia |
-| `SOUL.md` | Personalidad y principios de Pedro |
+| `SOUL.md` | Personalidad y principios de Orión |
 | `*.example.*` | Plantillas de tu perfil, memoria y apodos de proyectos |
 | `cerebro.sh`, `herramientas.py`, `parches.py`, `2-instalar-jarvis.sh` | Cerebro anterior (OpenJarvis en WSL), se conserva como respaldo |
 
@@ -52,7 +52,7 @@ Lo que lee en webs, correos, terminales o la pantalla lo trata como datos, nunca
    ANTHROPIC_API_KEY=tu_clave
    ANTHROPIC_BASE_URL=https://api.anthropic.com
    ```
-4. Abre `Jarvis.bat` → opción **1** y di "Pedro, …".
+4. Abre `Jarvis.bat` → opción **1** y di "Orión, …".
 5. Opción **7** corre las pruebas automáticas (simula las acciones; deja el reporte en `cerebro/pruebas/`).
 
 > Las rutas por defecto asumen `C:\Users\PC\Documents\jarvis`, proyectos en `C:\dev` y el grafo en `C:\dev_grafo`; se cambian con variables de entorno (`PEDRO_DEV`, `PEDRO_GRAFO`, `PEDRO_MODELO`…).

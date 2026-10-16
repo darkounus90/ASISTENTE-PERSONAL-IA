@@ -1,4 +1,4 @@
-// Cliente HTTP del cerebro de Pedro (http://127.0.0.1:8787 por defecto).
+// Cliente HTTP del cerebro de Orión (http://127.0.0.1:8787 por defecto).
 // Sin dependencias: usa fetch de Node >= 20.
 
 import { contenidoDeRespuesta } from './logica.js';

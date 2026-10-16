@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Pedro
+title Orion
 cd /d "%~dp0"
 
 rem ==== Ajustes (se guardan solos desde el menu) ====
@@ -21,21 +21,21 @@ cls
 if /i "%PEDRO_CEREBRO%"=="nuevo" (set "CEREBRO=NUEVO - motor de Claude Code") else (set "CEREBRO=ANTERIOR - OpenJarvis en Ubuntu")
 echo.
 echo     =========================================
-echo                   P E D R O
+echo                   O R I O N
 echo     =========================================
 call :estado
 echo.
-echo       [1]  Iniciar Pedro con voz  (di "Pedro, ...")
-echo       [2]  Iniciar Pedro con voz  (Enter para hablar)
+echo       [1]  Iniciar Orion con voz  (di "Orion, ...")
+echo       [2]  Iniciar Orion con voz  (Enter para hablar)
 echo       [3]  Chat por texto
 echo       [4]  Elegir voz
 echo       [5]  Microfono y parlante (elegir y probar)
-echo       [6]  Apagar Pedro
-echo       [7]  Probar a Pedro (pruebas automaticas, no ejecuta nada real)
-echo       [8]  Instalar Node.js (para que Pedro maneje Comet)
+echo       [6]  Apagar Orion
+echo       [7]  Probar a Orion (pruebas automaticas, no ejecuta nada real)
+echo       [8]  Instalar Node.js (para que Orion maneje Comet)
 echo       [9]  Conectar Google (Gmail y Calendar)
-echo       [W]  Pedro por WhatsApp (te responde en tu chat contigo mismo)
-echo       [A]  Arrancar Pedro solo al prender el PC (activar/quitar)
+echo       [W]  Orion por WhatsApp (te responde en tu chat contigo mismo)
+echo       [A]  Arrancar Orion solo al prender el PC (activar/quitar)
 echo       [C]  Cambiar cerebro: %CEREBRO%
 echo       [0]  Salir
 echo.
@@ -82,17 +82,17 @@ exit /b
 :encender
 curl.exe -s -m 2 %JARVIS_API%/health >nul 2>&1
 if errorlevel 1 goto arrancar
-rem Si cambie archivos de Pedro despues de que arranco el cerebro, lo reinicio solo
+rem Si cambie archivos de Orion despues de que arranco el cerebro, lo reinicio solo
 powershell -NoProfile -Command "$m = Get-Item cerebro.iniciado -ErrorAction SilentlyContinue; if (-not $m) { exit 1 }; $n = Get-ChildItem -Path .\*, .\herramientas\*, .\cerebro\* -Include *.py,*.md,*.json,*.sh,*.ps1 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin @('recordatorios.json','historial.json','MEMORY.md','avisos.json','rutinas.json','vigilancia.json','estado.json','posicion.json') -and $_.LastWriteTime -gt $m.LastWriteTime }; if ($n) { exit 1 } else { exit 0 }" >nul 2>&1
 if not errorlevel 1 exit /b 0
 echo.
-echo     Hay cambios nuevos en Pedro: reiniciando el cerebro...
+echo     Hay cambios nuevos en Orion: reiniciando el cerebro...
 call :matar
 :arrancar
 echo.
 if /i "%PEDRO_CEREBRO%"=="nuevo" (
-  echo     Encendiendo el cerebro de Pedro. La primera vez descarga cosas: 1-3 minutos...
-  start "Pedro - cerebro (no cerrar)" /min powershell -NoProfile -ExecutionPolicy Bypass -File "cerebro\iniciar-cerebro.ps1"
+  echo     Encendiendo el cerebro de Orion. La primera vez descarga cosas: 1-3 minutos...
+  start "Orion - cerebro (no cerrar)" /min powershell -NoProfile -ExecutionPolicy Bypass -File "cerebro\iniciar-cerebro.ps1"
 ) else (
   echo     Encendiendo el cerebro anterior en Ubuntu...
   start "Jarvis - cerebro (no cerrar)" /min wsl.exe -d Ubuntu -- bash /mnt/c/Users/PC/Documents/jarvis/cerebro.sh %JARVIS_PORT% %JARVIS_AGENTE%
@@ -143,7 +143,7 @@ goto menu
 :probar
 call :encender || goto menu
 echo.
-echo     Corriendo las pruebas de Pedro (unos minutos). Las acciones se simulan; solo lee archivos y terminales.
+echo     Corriendo las pruebas de Orion (unos minutos). Las acciones se simulan; solo lee archivos y terminales.
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "cerebro\correr.ps1" probar.py
 echo.
@@ -204,7 +204,7 @@ goto menu
 where npx >nul 2>&1
 if not errorlevel 1 (
   echo.
-  echo     Node.js ya esta instalado. Pedro puede manejar Comet.
+  echo     Node.js ya esta instalado. Orion puede manejar Comet.
   timeout /t 3 >nul
   goto menu
 )
@@ -212,7 +212,7 @@ echo.
 echo     Instalando Node.js LTS con winget...
 winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
 echo.
-echo     Listo. Cierra y vuelve a abrir este menu para que Pedro lo detecte.
+echo     Listo. Cierra y vuelve a abrir este menu para que Orion lo detecte.
 pause
 goto menu
 
@@ -222,7 +222,7 @@ echo     Conectando Gmail y Calendar. Ten a mano el JSON de credenciales de Goog
 echo.
 wsl.exe -d Ubuntu -- bash -ic "~/.openjarvis/.venv/bin/python /mnt/c/Users/PC/Documents/jarvis/herramientas/google_auth_pedro.py"
 echo.
-echo     Reiniciando el cerebro para que Pedro use la conexion...
+echo     Reiniciando el cerebro para que Orion use la conexion...
 call :matar
 call :encender
 pause
@@ -233,7 +233,7 @@ call :matar
 rem tambien el panel (HUD) y WhatsApp
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'hud\\hud\.py|pedro-whatsapp' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 echo.
-echo     Pedro apagado.
+echo     Orion apagado.
 timeout /t 2 >nul
 goto menu
 
@@ -246,9 +246,9 @@ exit /b
 
 :whatsapp
 call :encender || goto menu
-start "Pedro - WhatsApp (no cerrar)" powershell -NoProfile -ExecutionPolicy Bypass -File "whatsapp\iniciar-whatsapp.ps1"
+start "Orion - WhatsApp (no cerrar)" powershell -NoProfile -ExecutionPolicy Bypass -File "whatsapp\iniciar-whatsapp.ps1"
 echo.
-echo     Pedro por WhatsApp se abrio en otra ventana. La primera vez escanea el QR desde tu celular:
+echo     Orion por WhatsApp se abrio en otra ventana. La primera vez escanea el QR desde tu celular:
 echo     WhatsApp - Dispositivos vinculados - Vincular un dispositivo.
 timeout /t 4 >nul
 goto menu
@@ -256,6 +256,7 @@ goto menu
 :autoarranque
 set "AA="
 if exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Pedro.lnk" set "AA=1"
+if exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Orion.lnk" set "AA=1"
 if defined AA (
   powershell -NoProfile -ExecutionPolicy Bypass -File "tools\instalar-autoarranque.ps1" -Quitar
 ) else (

@@ -1,4 +1,4 @@
-﻿# Pedro: listar, LEER y escribir en terminales abiertas.
+﻿# Orión: listar, LEER y escribir en terminales abiertas.
 # Lo llama pc_mcp.py desde WSL. El texto llega en Base64 (UTF-8) para no pelear con comillas.
 #   -Listar                         -> "clase<TAB>titulo" por ventana de terminal
 #   -Leer -Titulo X [-Lineas 60]    -> ultimas lineas visibles/recientes de esa terminal (UI Automation)

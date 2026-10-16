@@ -1,8 +1,8 @@
-"""Servidor MCP mínimo (stdio) para que Pedro use Comet en Windows desde WSL.
+"""Servidor MCP mínimo (stdio) para que Orión use Comet en Windows desde WSL.
 
 Herramientas:
   abrir_en_comet(url)  -> abre la URL en TU Comet normal (con tus sesiones), para que la veas.
-  abrir_comet_pedro()  -> abre el Comet con el perfil de Pedro (el que él puede controlar).
+  abrir_comet_pedro()  -> abre el Comet con el perfil de Orión (el que él puede controlar).
 
 Sin dependencias: habla JSON-RPC por stdin/stdout.
 """
@@ -67,7 +67,7 @@ def abrir_comet_pedro() -> str:
     perfil = _win("echo %LOCALAPPDATA%") + r"\PedroComet"
     _lanzar(f"--remote-debugging-port={PUERTO_CDP}", f"--user-data-dir={perfil}",
             "--no-first-run", "--no-default-browser-check")
-    return "Abrí el Comet de Pedro (perfil propio, controlable)."
+    return "Abrí el Comet de Orión (perfil propio, controlable)."
 
 
 HERRAMIENTAS = {
@@ -78,7 +78,7 @@ HERRAMIENTAS = {
                         "properties": {"url": {"type": "string", "description": "Dirección web"}},
                         "required": ["url"]}}),
     "abrir_comet_pedro": (abrir_comet_pedro, {
-        "description": "Abre el Comet con el perfil propio de Pedro (necesario antes de usar las "
+        "description": "Abre el Comet con el perfil propio de Orión (necesario antes de usar las "
                        "herramientas browser_* que controlan el navegador).",
         "inputSchema": {"type": "object", "properties": {}}}),
 }

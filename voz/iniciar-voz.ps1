@@ -19,7 +19,7 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 # Microfono: "auto" = el predeterminado de Windows, o el que elijas en la opcion 5 (se guarda por nombre).
 if (-not $env:JARVIS_MIC) { $env:JARVIS_MIC = "auto" }
 if (-not $env:JARVIS_API) { $env:JARVIS_API = "http://127.0.0.1:8787" }
-# Atajo global para hablarle sin decir "Pedro" (y callarlo si esta hablando). "no" lo desactiva.
+# Atajo global para hablarle sin decir "Orion" (y callarlo si esta hablando). "no" lo desactiva.
 if (-not $env:JARVIS_ATAJO) { $env:JARVIS_ATAJO = "ctrl+alt+p" }
 try {
     $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "$env:JARVIS_API/health"

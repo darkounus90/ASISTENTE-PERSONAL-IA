@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""HUD de Pedro: panel pequeño, siempre encima, que muestra en qué está Pedro.
+"""HUD de Orión: panel pequeño, siempre encima, que muestra en qué está Orión.
 
 Lee (solo lectura) lo que escribe el cliente de voz:
   <jarvis>/tmp/estado.json  {"estado": "escuchando"|"oyendo"|"pensando"|"hablando"|"dormido"|"apagado",
@@ -62,11 +62,11 @@ class Estilo:
 
 
 ESTILOS = {
-    "escuchando": Estilo("Escuchando", "Di «Pedro, …»", "#22d3ee", 12),
+    "escuchando": Estilo("Escuchando", "Di «Orión, …»", "#22d3ee", 12),
     "oyendo": Estilo("Te escucho", "Sigue hablando…", "#7ff0ff", 24),
     "pensando": Estilo("Pensando", "Trabajando en tu pedido", "#f5b13d", 24),
     "hablando": Estilo("Hablando", "Respondiendo", "#2dd4bf", 24),
-    "dormido": Estilo("En reposo", "Di «Pedro, despierta»", "#66737d", 5),
+    "dormido": Estilo("En reposo", "Di «Orión, despierta»", "#66737d", 5),
     "sin_conexion": Estilo("Sin conexión", "Esperando al cliente de voz", "#ef4444", 5),
 }
 FPS_AVISO = 15
@@ -126,7 +126,7 @@ def interpretar(datos, ahora: float, mtime: float | None = None) -> Vista:
     usuario, pedro = _limpio(datos.get("usuario")), _limpio(datos.get("pedro"))
     if estado in ("", "apagado"):
         return _vista("sin_conexion", usuario, pedro,
-                      detalle="Pedro está apagado" if estado == "apagado" else "")
+                      detalle="Orión está apagado" if estado == "apagado" else "")
     marcas = [m for m in (_numero(datos.get("t")), _numero(mtime)) if m is not None]
     ultima = max(marcas) if marcas else None
     if estado != "dormido" and (ultima is None or ahora - ultima > VIEJO_S):
@@ -375,7 +375,7 @@ class FuenteArchivos:
 class FuenteDemo:
     """Estados y textos de ejemplo para ver el HUD sin el cliente de voz."""
 
-    PREGUNTA = "Pedro, ¿qué tengo pendiente para hoy?"
+    PREGUNTA = "Orión, ¿qué tengo pendiente para hoy?"
     RESPUESTA = ("Tienes una reunión a las tres de la tarde y dos correos sin responder. "
                  "¿Quieres que te lea el primero?")
     GUION = [  # (estado, usuario, pedro, segundos)
@@ -385,9 +385,9 @@ class FuenteDemo:
         ("pensando", PREGUNTA, "", 3.5),
         ("hablando", PREGUNTA, RESPUESTA, 5.0),
         ("escuchando", PREGUNTA, RESPUESTA, 4.0),
-        ("oyendo", "Pedro, mira esto, ¿qué tengo en la mano?", RESPUESTA, 2.0),
-        ("pensando", "Pedro, mira esto, ¿qué tengo en la mano?", "", 3.0),
-        ("hablando", "Pedro, mira esto, ¿qué tengo en la mano?",
+        ("oyendo", "Orión, mira esto, ¿qué tengo en la mano?", RESPUESTA, 2.0),
+        ("pensando", "Orión, mira esto, ¿qué tengo en la mano?", "", 3.0),
+        ("hablando", "Orión, mira esto, ¿qué tengo en la mano?",
          "Es una taza de café con el logo de Onnyx. Por cierto, ya casi es la hora de tu reunión.", 5.0),
         ("apagado", "", "", 3.5),
     ]
@@ -583,7 +583,7 @@ class HUD:
         self.guardar = guardar
         self.root = root = tk.Tk()
         root.withdraw()
-        root.title("Pedro HUD")
+        root.title("Orión HUD")
         self.esc = max(1.0, root.winfo_fpixels("1i") / 96.0)
 
         familias = set(tkfont.families(root))
@@ -728,7 +728,7 @@ class HUD:
 
         # cabecera de texto
         x0 = p(12 + 60 + 16)
-        self.rotulo = c.create_text(x0, p(20), text="PEDRO", anchor="w", fill=ACENTO, font=self.f_rotulo)
+        self.rotulo = c.create_text(x0, p(20), text="ORIÓN", anchor="w", fill=ACENTO, font=self.f_rotulo)
         self.reloj = c.create_text(self.w - m, p(20), text="", anchor="e", fill=TENUE, font=self.f_reloj)
         self.t_estado = c.create_text(x0, p(43), text="", anchor="w", fill=TEXTO, font=self.f_estado)
         self.t_detalle = c.create_text(x0, p(65), text="", anchor="w", fill=TEXTO_2, font=self.f_detalle)
@@ -740,7 +740,7 @@ class HUD:
         y2 = y1 + 2 * self.lh + p(8)
         xt = m + p(44)
         self.r_usuario = c.create_text(m, y1 + p(1), text="TÚ", anchor="nw", fill=TENUE, font=self.f_rotulo)
-        self.r_pedro = c.create_text(m, y2 + p(1), text="PEDRO", anchor="nw", fill=TENUE, font=self.f_rotulo)
+        self.r_pedro = c.create_text(m, y2 + p(1), text="ORIÓN", anchor="nw", fill=TENUE, font=self.f_rotulo)
         self.l_usuario = [c.create_text(xt, y1 + i * self.lh - p(2), text="", anchor="nw", fill=TEXTO_2,
                                         font=self.f_texto) for i in range(2)]
         self.l_pedro = [c.create_text(xt, y2 + i * self.lh - p(2), text="", anchor="nw", fill=TEXTO,
@@ -1032,19 +1032,19 @@ class HUD:
 
 # ------------------------------------------------------------------ entrada
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="HUD de Pedro (panel tipo JARVIS)")
+    ap = argparse.ArgumentParser(description="HUD de Orión (panel tipo JARVIS)")
     ap.add_argument("--demo", nargs="?", const="ciclo", default=None,
                     help="estados de ejemplo; opcional: escuchando|oyendo|pensando|hablando|dormido|apagado|"
                          "aviso|aviso-normal para quedarse en uno")
     ap.add_argument("--esquina", choices=ESQUINAS, help="empezar en esta esquina (ignora la posición guardada)")
-    ap.add_argument("--raiz", type=Path, default=RAIZ, help="carpeta de Pedro (por defecto, la que contiene hud/)")
+    ap.add_argument("--raiz", type=Path, default=RAIZ, help="carpeta de Orión (por defecto, la que contiene hud/)")
     ap.add_argument("--puerto", type=int, default=PUERTO, help="puerto local para no abrir dos HUD")
     a = ap.parse_args(argv)
 
     demo = a.demo is not None
     sock = tomar_instancia(a.puerto + (1 if demo else 0))
     if sock is None:
-        print("El HUD de Pedro ya está abierto.", file=sys.stderr if sys.stderr else None)
+        print("El HUD de Orión ya está abierto.", file=sys.stderr if sys.stderr else None)
         return 0
     fuente = FuenteDemo(None if a.demo == "ciclo" else a.demo) if demo else FuenteArchivos(a.raiz)
     _dpi_nitido()

@@ -1,4 +1,4 @@
-# Memoria de Pedro
+# Memoria de Orión
 
 ## Proyectos activos
 - Proyecto A: qué es, stack, estado.
@@ -7,6 +7,6 @@
 - Proyecto B.
 
 ## Decisiones
-- Canal principal de Pedro: voz en el PC.
+- Canal principal de Orión: voz en el PC.
 
 ## Preferencias

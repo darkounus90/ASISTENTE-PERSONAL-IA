@@ -1,4 +1,4 @@
-# Reporte de QA — Pedro (15 oct 2026)
+# Reporte de QA — Orión (15 oct 2026)
 
 **Alcance:** política de permisos (`cerebro/politica.py`), servidor del cerebro (`cerebro/pedro_cerebro.py`), herramientas del PC (`herramientas/pc_mcp.py`, `escribir.ps1`), visión, grafo.
 **Método:** revisión de código por un revisor independiente + pruebas automáticas (unitarias de la política y de punta a punta del cerebro contra un modelo simulado) + pruebas manuales por voz en el PC real.
@@ -32,12 +32,12 @@
 
 ## Medios y bajos
 
-Corregidos: redirecciones a archivo (`1>`, `&>`, `tee`, `dd of=`), persistencia en Windows (`reg add …\Run`, `schtasks`), `pwsh`/`ri`/`docker-compose`, escritura en terminales ajenas por coincidencia parcial de título (ahora exacta para las ventanas `Pedro-…`), comandos escritos en las consolas `Pedro-dev-…` (siguen la misma lista blanca), portapapeles borrado al escribir, `.env.example` y `token.ts` bloqueados por error.
+Corregidos: redirecciones a archivo (`1>`, `&>`, `tee`, `dd of=`), persistencia en Windows (`reg add …\Run`, `schtasks`), `pwsh`/`ri`/`docker-compose`, escritura en terminales ajenas por coincidencia parcial de título (ahora exacta para las ventanas `Orion-…`), comandos escritos en las consolas `Orion-dev-…` (siguen la misma lista blanca), portapapeles borrado al escribir, `.env.example` y `token.ts` bloqueados por error.
 
 Aceptados (riesgo conocido):
 - El permiso depende del hook `PreToolUse` del motor de Claude Code; verificado que se dispara para Bash, archivos, herramientas MCP y la visión.
 - Límite de espera por mensaje (90 s sin noticias del modelo), no por turno completo.
-- Al cortar a Pedro en medio de una herramienta, el turno se interrumpe; si queda inconsistente, el siguiente turno reinicia la sesión.
+- Al cortar a Orión en medio de una herramienta, el turno se interrumpe; si queda inconsistente, el siguiente turno reinicia la sesión.
 
 ## Pruebas
 

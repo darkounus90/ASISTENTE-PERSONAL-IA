@@ -1,4 +1,4 @@
-"""Servidor MCP mínimo (stdio) para que Pedro lance tareas de Claude Code en Windows desde WSL.
+"""Servidor MCP mínimo (stdio) para que Orión lance tareas de Claude Code en Windows desde WSL.
 
 Herramientas:
   lanzar_claude_code(proyecto, instruccion) -> arranca Claude Code en segundo plano en C:\\dev\\<proyecto>

@@ -1,4 +1,4 @@
-"""Conecta Pedro con tu Gmail y Google Calendar (se ejecuta UNA vez, en la terminal de WSL).
+"""Conecta Orión con tu Gmail y Google Calendar (se ejecuta UNA vez, en la terminal de WSL).
 
 Uso:  python3 google_auth_pedro.py
 
@@ -159,7 +159,7 @@ def abrir_navegador(url: str) -> bool:
 
 # --------------------------------------------------------------------------- callback local
 
-PAGINA = """<!doctype html><html lang="es"><meta charset="utf-8"><title>Pedro</title>
+PAGINA = """<!doctype html><html lang="es"><meta charset="utf-8"><title>Orión</title>
 <body style="font-family:system-ui,sans-serif;max-width:560px;margin:60px auto;padding:0 16px">
 <h2>{titulo}</h2><p>{texto}</p></body></html>"""
 
@@ -201,7 +201,7 @@ def esperar_callback(servidor: HTTPServer, estado: str) -> str:
                 self._pagina(400, "Falta el código", "Google no envió el código de autorización.")
                 return
             resultado["code"] = q["code"]
-            self._pagina(200, "¡Listo! Pedro ya está conectado",
+            self._pagina(200, "¡Listo! Orión ya está conectado",
                          "Puedes cerrar esta pestaña y volver a la terminal.")
 
     servidor.RequestHandlerClass = Manejador
@@ -286,7 +286,7 @@ def correo_conectado(access_token: str) -> str | None:
 # --------------------------------------------------------------------------- main
 
 def main() -> int:
-    print("=== Conectar Pedro con Gmail y Google Calendar ===\n")
+    print("=== Conectar Orión con Gmail y Google Calendar ===\n")
     try:
         client_id, secreto = pedir_credenciales()
         try:
@@ -322,7 +322,7 @@ def main() -> int:
             "scopes": concedidos,
         })
         quien = correo_conectado(tok["access_token"]) if "https://www.googleapis.com/auth/gmail.readonly" in concedidos else None
-        print("\n✔ ¡Listo! Pedro ya puede leer tu Gmail y usar tu Google Calendar.")
+        print("\n✔ ¡Listo! Orión ya puede leer tu Gmail y usar tu Google Calendar.")
         if quien:
             print(f"  Cuenta conectada: {quien}")
         print(f"  Token guardado en {RUTA_TOKEN} (permisos 600).")

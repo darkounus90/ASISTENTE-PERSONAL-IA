@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["httpx>=0.27"]
 # ///
-"""Pruebas automáticas de Pedro: manda casos reales al cerebro en MODO PRUEBA (las acciones
+"""Pruebas automáticas de Orión: manda casos reales al cerebro en MODO PRUEBA (las acciones
 no se ejecutan de verdad, solo se leen archivos/terminales) y califica cada respuesta.
 
 Uso:  uv run probar.py            (todos)
@@ -134,14 +134,14 @@ def main() -> None:
               f"{ult.get('segundos', 0):5.1f}s  {'; '.join(fallas)[:110]}")
     bien = sum(r["ok"] for r in resultados)
     resumen = f"{bien}/{len(resultados)} casos bien · {time.time() - t_inicio:.0f}s"
-    lineas = [f"# Pruebas de Pedro — {datetime.now():%Y-%m-%d %H:%M}", "", f"**{resumen}**", ""]
+    lineas = [f"# Pruebas de Orión — {datetime.now():%Y-%m-%d %H:%M}", "", f"**{resumen}**", ""]
     for r in resultados:
         lineas.append(f"## {'✅' if r['ok'] else '❌'} {r['id']}")
         for f in r["fallas"]:
             lineas.append(f"- FALLA: {f}")
         for t in r["turnos"]:
             herr = ", ".join(f"{x['herramienta']}[{x['decision']}] {x['entrada'][:90]}" for x in t["traza"]) or "ninguna"
-            lineas += [f"- **Andres:** {t['texto']}", f"  - **Pedro** ({t['segundos']}s, 1a palabra "
+            lineas += [f"- **Andres:** {t['texto']}", f"  - **Orión** ({t['segundos']}s, 1a palabra "
                        f"{t['tiempos'].get('primera_palabra', '?')}s): {t['respuesta']}", f"  - herramientas: {herr}"]
         lineas.append("")
     (SALIDA / "ultimo-reporte.md").write_text("\n".join(lineas), encoding="utf-8")

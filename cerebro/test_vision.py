@@ -1,4 +1,4 @@
-"""Pruebas de la visión de Pedro (pantalla + cámara) sin pantalla ni cámara reales.
+"""Pruebas de la visión de Orión (pantalla + cámara) sin pantalla ni cámara reales.
 
 Corre en Linux o Windows:  python cerebro/test_vision.py
 Necesita claude-agent-sdk; las pruebas de la cámara real (con cv2 simulado) necesitan opencv-python y numpy.

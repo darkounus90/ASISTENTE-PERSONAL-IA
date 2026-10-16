@@ -1,4 +1,4 @@
-﻿# Pedro: volumen, musica y pantalla con las teclas multimedia de Windows.
+﻿# Orión: volumen, musica y pantalla con las teclas multimedia de Windows.
 # Lo llama pc_mcp.py (herramienta control_pc) desde WSL. Solo simula teclas multimedia
 # y apaga el monitor; no ejecuta programas ni descarga nada.
 #   -Accion volumen -Valor 40          -> baja todo y sube hasta ~40 % (cada pulsacion = 2 %)
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class PedroTeclas {
+public class OriónTeclas {
   [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
 }
@@ -37,8 +37,8 @@ $MUSICA_PAUSA = 0xB3
 
 function Pulsar([int]$Tecla, [int]$Veces = 1) {
     for ($i = 0; $i -lt $Veces; $i++) {
-        [PedroTeclas]::keybd_event([byte]$Tecla, 0, 1, [UIntPtr]::Zero)   # pulsar (tecla extendida)
-        [PedroTeclas]::keybd_event([byte]$Tecla, 0, 3, [UIntPtr]::Zero)   # soltar
+        [OriónTeclas]::keybd_event([byte]$Tecla, 0, 1, [UIntPtr]::Zero)   # pulsar (tecla extendida)
+        [OriónTeclas]::keybd_event([byte]$Tecla, 0, 3, [UIntPtr]::Zero)   # soltar
         Start-Sleep -Milliseconds 15
     }
 }
@@ -69,7 +69,7 @@ try {
         "pantalla_apagar" {
             Start-Sleep -Milliseconds 800   # que no la despierte el ultimo movimiento
             # WM_SYSCOMMAND / SC_MONITORPOWER / 2 = apagar (PostMessage: no se queda esperando)
-            [void][PedroTeclas]::PostMessage([IntPtr]0xFFFF, 0x0112, [IntPtr]0xF170, [IntPtr]2)
+            [void][OriónTeclas]::PostMessage([IntPtr]0xFFFF, 0x0112, [IntPtr]0xF170, [IntPtr]2)
             "OK: pantalla apagada"
         }
     }

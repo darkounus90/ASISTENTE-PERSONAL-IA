@@ -1,8 +1,8 @@
-"""Configura las herramientas de Pedro (lo llama cerebro.sh en cada arranque).
+"""Configura las herramientas de Orión (lo llama cerebro.sh en cada arranque).
 
 - Lectura: buscar en internet, consultar URLs/APIs, calcular.
 - Comet (etapa 1): abrir páginas en el Comet de Andres.
-- Comet (etapa 2): controlar el Comet con perfil propio de Pedro vía Playwright MCP
+- Comet (etapa 2): controlar el Comet con perfil propio de Orión vía Playwright MCP
   (necesita Node.js en Windows; se usa con npx).
 Nada que ejecute comandos ni escriba/borre archivos.
 """
@@ -96,7 +96,7 @@ if "memory" not in doc:
     doc["memory"] = tomlkit.table()
 doc["memory"]["enabled"] = True
 doc["memory"]["backend"] = "local"
-doc["memory"]["extraction_model"] = ""      # "" = el mismo modelo de Pedro
+doc["memory"]["extraction_model"] = ""      # "" = el mismo modelo de Orión
 doc["memory"]["max_facts"] = 1000
 cfg.write_text(tomlkit.dumps(doc))
 

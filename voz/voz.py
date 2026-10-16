@@ -26,9 +26,9 @@ Uso (normalmente desde Jarvis.bat):
     uv run voz.py --prueba      # medidor de micrófono y "Hey Jarvis"
     uv run voz.py --voces       # escuchar voces para elegir
 
-Atajo global (Windows): Ctrl+Alt+P (env JARVIS_ATAJO) = te escucho ya, sin decir "Pedro";
+Atajo global (Windows): Ctrl+Alt+P (env JARVIS_ATAJO) = te escucho ya, sin decir "Orión";
 si está hablando, se calla y escucha.
-Estado para el HUD: tmp/estado.json (en la carpeta de Pedro), se reescribe en cada cambio.
+Estado para el HUD: tmp/estado.json (en la carpeta de Orión), se reescribe en cada cambio.
 Avisos proactivos: lee avisos.json (lo escribe el cerebro) y los dice cuando no está hablando.
 """
 from __future__ import annotations
@@ -71,7 +71,7 @@ UMBRAL_WAKE = float(os.environ.get("JARVIS_UMBRAL", "0.5"))
 # "nombre": Whisper escucha y se activa al oír "Jarvis" (funciona con acento en español)
 # "hey": detector openWakeWord "Hey Jarvis" (entrenado en inglés)
 ACTIVACION = os.environ.get("JARVIS_ACTIVACION", "nombre")
-NOMBRE = os.environ.get("JARVIS_NOMBRE", "Pedro")
+NOMBRE = os.environ.get("JARVIS_NOMBRE", "Orión")
 AGENTE = os.environ.get("JARVIS_AGENTE", "simple")
 INTERRUPCION = os.environ.get("JARVIS_INTERRUPCION", "1") != "0"      # callarse si le hablas
 SENS_INTERRUPCION = float(os.environ.get("JARVIS_SENS_INTERRUPCION", "3.2"))  # más alto = menos sensible
@@ -383,7 +383,7 @@ def elegir_salida() -> None:
             continue
         vistos.add(clave)
         lista.append(nombre)
-    print("\n  Salidas de sonido (por dónde habla Pedro):\n")
+    print("\n  Salidas de sonido (por dónde habla Orión):\n")
     print("   [0] Automático: el parlante predeterminado de Windows")
     for n, nombre in enumerate(lista, 1):
         print(f"   [{n}] {nombre}")
@@ -400,7 +400,7 @@ def elegir_salida() -> None:
     elif r.isdigit() and 1 <= int(r) <= len(lista):
         with open(PARLANTE_ARCHIVO, "w", encoding="utf-8") as f:
             f.write(lista[int(r) - 1])
-        print(f"  Listo: Pedro hablará por «{lista[int(r) - 1]}».")
+        print(f"  Listo: Orión hablará por «{lista[int(r) - 1]}».")
 
 
 def elegir_mic() -> None:
@@ -455,13 +455,13 @@ def _ahora_local():
 
 
 # ----------------------------------------------------------------- Estado (para el HUD)
-# tmp/estado.json: {"estado": ..., "usuario": último texto tuyo, "pedro": último texto de Pedro, "t": epoch}
+# tmp/estado.json: {"estado": ..., "usuario": último texto tuyo, "pedro": último texto de Orión, "t": epoch}
 ESTADOS = ("escuchando", "oyendo", "pensando", "hablando", "dormido", "apagado")
 _ESTADO = {"estado": "apagado", "usuario": "", "pedro": "", "t": 0.0}
 _ESTADO_LOCK = threading.Lock()
 _ESTADO_ULTIMO = [0.0]        # cuándo se escribió por última vez
 _ESTADO_PENDIENTE = [False]   # texto parcial guardado en memoria pero aún no escrito (límite 5/s)
-_DORMIDO = [False]            # "Pedro, duérmete": solo despierta con su nombre (o el atajo)
+_DORMIDO = [False]            # "Orión, duérmete": solo despierta con su nombre (o el atajo)
 
 
 def _recortar(txt: str, n: int = 400) -> str:
@@ -501,7 +501,7 @@ def _escribir_json(ruta: str, datos, indent: int | None = None) -> bool:
 def poner_estado(estado: str | None = None, usuario: str | None = None, pedro: str | None = None,
                  forzar: bool = False) -> None:
     """Actualiza tmp/estado.json. Los cambios de estado se escriben al instante; el texto parcial
-    de Pedro (streaming) máximo 5 veces por segundo (lo que quede pendiente sale en la próxima)."""
+    de Orión (streaming) máximo 5 veces por segundo (lo que quede pendiente sale en la próxima)."""
     with _ESTADO_LOCK:
         antes = dict(_ESTADO)
         if estado is not None:
@@ -684,7 +684,7 @@ cola: "queue.Queue[np.ndarray]" = queue.Queue()
 
 
 # ----------------------------------------------------------------- Cancelación de eco (como Alexa)
-# Pedro sabe exactamente qué está diciendo (la "referencia") y se lo resta al micrófono con el
+# Orión sabe exactamente qué está diciendo (la "referencia") y se lo resta al micrófono con el
 # procesador de audio de WebRTC (el de Google Meet). Así no se escucha a sí mismo aunque hable
 # por la TV, y lo puedes interrumpir hablando normal. JARVIS_AEC=0 lo apaga.
 AEC_ON = os.environ.get("JARVIS_AEC", "1") != "0"
@@ -726,7 +726,7 @@ class CancelacionEco:
         self.resto = datos[n:].copy()
 
     def limpiar(self, mic: np.ndarray) -> np.ndarray:
-        """Devuelve el audio del micrófono sin la voz de Pedro."""
+        """Devuelve el audio del micrófono sin la voz de Orión."""
         if not self.activo:
             return mic
         try:
@@ -809,7 +809,7 @@ def umbral_voz() -> float:
 
 def grabar_frase(espera_max: float, previo: list | None = None) -> np.ndarray | None:
     """Graba hasta que dejes de hablar. None si no hablaste en `espera_max` seg.
-    `previo`: audio ya capturado (cuando interrumpiste a Pedro) para no perder tu inicio."""
+    `previo`: audio ya capturado (cuando interrumpiste a Orión) para no perder tu inicio."""
     partes: list[np.ndarray] = list(previo or [])
     hablo = bool(previo)
     if hablo and not _DORMIDO[0]:
@@ -966,7 +966,7 @@ def cargar_stt():
 
 # Vocabulario de Andres: ayuda a Whisper con nombres propios y términos técnicos.
 VOCABULARIO = os.environ.get("JARVIS_VOCABULARIO", (
-    "Pedro, Claude Code, 18 Kilates, la joyería, CHECK, Onnyx, Onnyx Software, VS Code, "
+    "Orión, Claude Code, 18 Kilates, la joyería, CHECK, Onnyx, Onnyx Software, VS Code, "
     "Comet, Vercel, Railway, Supabase, Next.js, NestJS, Notion, Obsidian, Dropi, Motojaponesa, "
     "recordatorio, abre la carpeta, abre el proyecto, lanza Claude Code."))
 
@@ -1386,14 +1386,25 @@ def responder(texto: str, wake) -> list | None:
 
 
 # ----------------------------------------------------------------- Activación por nombre
-_NOMBRE = re.compile(r"\b(?:oye|hey|ey|ok|okay|hola)?[\s,]*" + re.escape(NOMBRE) + r"\b[\s,.:!¡?¿-]*",
+def _patron_nombre(nombre: str) -> str:
+    """Regex tolerante a cómo Whisper escribe el nombre (tildes, espacios, variantes)."""
+    variantes = {"orion": r"o\s?r[iíy]+[oóa]n|oreon|o'?ryan"}
+    base = "".join(c for c in __import__("unicodedata").normalize("NFD", nombre.lower())
+                   if __import__("unicodedata").category(c) != "Mn")
+    if base in variantes:
+        return variantes[base]
+    clases = {"a": "[aá]", "e": "[eé]", "i": "[ií]", "o": "[oó]", "u": "[uúü]"}
+    return "".join(clases.get(c, re.escape(c)) for c in base)
+
+
+_NOMBRE = re.compile(r"\b(?:oye|hey|ey|ok|okay|hola)?[\s,]*(?:" + _patron_nombre(NOMBRE) + r")\b[\s,.:!¡?¿-]*",
                      re.IGNORECASE)
 
 
 _PARAR = re.compile(
     r"^\W*(?:ya\W+)?(para|párale|parale|detente|cállate|callate|silencio|stop|basta|cancela|"
     r"olvídalo|olvidalo|nada|está bien|esta bien|ya está|ya esta|eso es todo|listo)"
-    r"(?:\W+(?:gracias|por favor|pedro|ya))*\W*$", re.IGNORECASE)
+    r"(?:\W+(?:gracias|por favor|pedro|ori[oó]n|ya))*\W*$", re.IGNORECASE)
 _DORMIR = re.compile(r"\b(duérmete|duermete|a dormir|modo silencio|en pausa|pausa|pausado|"
                      r"descansa|no escuches|deja de escuchar)\b", re.IGNORECASE)
 _DESPERTAR = re.compile(r"\b(despierta|despiértate|despiertate|vuelve|activa|actívate|"
@@ -1416,7 +1427,7 @@ def buscar_nombre(texto: str) -> tuple[bool, str]:
 
 
 # ----------------------------------------------------------------- Atajo de teclado global (Windows)
-_ATAJO = threading.Event()      # se pulsó el atajo: escuchar ya (y callar a Pedro si está hablando)
+_ATAJO = threading.Event()      # se pulsó el atajo: escuchar ya (y callar a Orión si está hablando)
 _ATAJO_ACTIVO = [False]
 _MODIFICADORES = {"ctrl": 0x2, "control": 0x2, "alt": 0x1, "shift": 0x4, "mayus": 0x4, "win": 0x8}
 _TECLAS_ATAJO = {"space": 0x20, "espacio": 0x20, "pause": 0x13, "pausa": 0x13, "insert": 0x2D,
@@ -1596,7 +1607,7 @@ VOCES_CANDIDATAS = [
 
 
 def probar_voces() -> None:
-    frase = ("Hola Andrés, soy Pedro. Revisé tus pendientes: tienes dos entregas esta semana "
+    frase = ("Hola Andrés, soy Orión. Revisé tus pendientes: tienes dos entregas esta semana "
              "y el servidor de producción está estable. ¿Por dónde empezamos?")
     print("\n  Escucha cada voz. Ctrl+C para salir.\n")
     for num, voz, desc in VOCES_CANDIDATAS:
@@ -1649,7 +1660,7 @@ def main() -> None:
     if args.microfonos:
         print(sd.query_devices())
         print("\n  Micrófono por defecto:", sd.query_devices(kind="input")["name"])
-        print("  Pedro usará:", resolver_mic()[1])
+        print("  Orión usará:", resolver_mic()[1])
         return
     if args.elegir_mic:
         elegir_mic()
@@ -1716,7 +1727,7 @@ def main() -> None:
             procesar_eventos(wake)
             estado_reposo()
             if _ATAJO.is_set():
-                # Atajo de teclado: como si hubieras dicho "Pedro" (y si estaba en pausa, despierta)
+                # Atajo de teclado: como si hubieras dicho "Orión" (y si estaba en pausa, despierta)
                 _ATAJO.clear()
                 if _DORMIDO[0]:
                     _DORMIDO[0] = False

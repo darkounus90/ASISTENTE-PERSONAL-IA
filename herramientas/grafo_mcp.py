@@ -1,4 +1,4 @@
-"""Servidor MCP mínimo (stdio) para que Pedro use el grafo de Obsidian de Andres (C:\\dev_grafo).
+"""Servidor MCP mínimo (stdio) para que Orión use el grafo de Obsidian de Andres (C:\\dev_grafo).
 
 Herramientas:
   buscar_notas(texto)                 -> notas cuyo título o contenido coinciden
@@ -20,7 +20,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 GRAFO = os.path.realpath(os.environ.get("PEDRO_GRAFO", "/mnt/c/dev_grafo"))
-CARPETA_PEDRO = "Pedro"            # carpeta por defecto para notas nuevas
+CARPETA_ORION = "Orión"            # carpeta por defecto para notas nuevas
 ZONA = ZoneInfo("America/Bogota")
 _OCULTAS = {".obsidian", ".trash", ".git", "node_modules"}
 _ENLACE = re.compile(r"\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]")
@@ -189,7 +189,7 @@ def notas_recientes(n: int = 10) -> str:
 
 
 def _carpeta_segura(carpeta: str) -> str:
-    carpeta = (carpeta or CARPETA_PEDRO).strip().strip("/\\").replace("\\", "/")
+    carpeta = (carpeta or CARPETA_ORION).strip().strip("/\\").replace("\\", "/")
     partes = [p for p in carpeta.split("/") if p]
     if any(p in (".", "..") or p.startswith(".") or _TITULO_MALO.search(p) for p in partes):
         raise ValueError("Carpeta no permitida.")
@@ -211,11 +211,11 @@ def crear_nota(titulo: str, contenido: str, carpeta: str = "", etiquetas: list =
     if any(_norm(_titulo(n)) == _norm(titulo) for n in _notas()):
         raise ValueError(f"Ya hay una nota llamada '{titulo}' en otra carpeta. Usa agregar_a_nota.")
     tags = [re.sub(r"[^\w/-]", "", t) for t in (etiquetas or []) if t]
-    tags = ["pedro"] + [t for t in tags if t and t != "pedro"]
+    tags = ["orion"] + [t for t in tags if t and t not in ("orion", "pedro")]
     cabecera = ("---\n"
                 f"creado: {datetime.now(ZONA):%Y-%m-%d %H:%M}\n"
                 f"tags: [{', '.join(tags)}]\n"
-                "fuente: Pedro\n"
+                "fuente: Orión\n"
                 "---\n\n")
     os.makedirs(destino, exist_ok=True)
     with open(ruta, "x", encoding="utf-8", newline="\n") as f:
@@ -229,7 +229,7 @@ def agregar_a_nota(nota: str, texto: str) -> str:
         raise ValueError("No hay texto para agregar.")
     rel = _resolver(nota)
     with open(os.path.join(GRAFO, rel), "a", encoding="utf-8", newline="\n") as f:
-        f.write(f"\n\n<!-- Pedro {datetime.now(ZONA):%Y-%m-%d %H:%M} -->\n{texto.rstrip()}\n")
+        f.write(f"\n\n<!-- Orión {datetime.now(ZONA):%Y-%m-%d %H:%M} -->\n{texto.rstrip()}\n")
     return f"Agregado al final de {rel}"
 
 
@@ -255,11 +255,11 @@ HERRAMIENTAS = {
         "description": "Las notas del grafo modificadas más recientemente.",
         "inputSchema": _obj({"n": {"type": "integer"}})}),
     "crear_nota": (crear_nota, {
-        "description": "Crea una nota NUEVA en el grafo (por defecto en la carpeta Pedro/). Nunca sobrescribe. "
+        "description": "Crea una nota NUEVA en el grafo (por defecto en la carpeta Orión/). Nunca sobrescribe. "
                        "Conéctala con [[Nombre de nota]] a notas existentes (búscalas antes). Escribe en "
                        "Markdown. No guardes secretos ni contenido copiado de correos o webs sin que Andres lo pida.",
         "inputSchema": _obj({"titulo": _S, "contenido": _S,
-                             "carpeta": {"type": "string", "description": "Subcarpeta (por defecto Pedro)"},
+                             "carpeta": {"type": "string", "description": "Subcarpeta (por defecto Orión)"},
                              "etiquetas": {"type": "array", "items": _S}}, ["titulo", "contenido"])}),
     "agregar_a_nota": (agregar_a_nota, {
         "description": "Añade texto al FINAL de una nota existente del grafo (nunca borra ni reescribe).",

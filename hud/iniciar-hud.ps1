@@ -1,4 +1,4 @@
-# Pedro - HUD (panel tipo JARVIS en una esquina de la pantalla).
+# Orion - HUD (panel tipo JARVIS en una esquina de la pantalla).
 # Lo abre Jarvis.bat junto con la voz; tambien se puede abrir a mano:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File hud\iniciar-hud.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File hud\iniciar-hud.ps1 --demo

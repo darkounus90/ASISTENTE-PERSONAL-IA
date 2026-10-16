@@ -1,4 +1,4 @@
-// Pedro por WhatsApp
+// Orión por WhatsApp
 // Se vincula como "dispositivo" (WhatsApp Web) a TU cuenta y SOLO atiende el chat
 // "Mensajes para ti mismo". Nunca lee, responde ni marca como leído ningún otro chat,
 // grupo, estado o difusión: no le escribe a terceros, jamás.
@@ -92,7 +92,7 @@ let temporizadorReconexion = null;
 let cerrando = false;
 let avisoCerebroApagado = false;     // "mi cerebro está apagado" se manda una sola vez por caída
 let ultimoEnvio = 0;
-const enviados = new ConjuntoLimitado(500);    // ids de mensajes que mandó Pedro
+const enviados = new ConjuntoLimitado(500);    // ids de mensajes que mandó Orión
 const cacheEnviados = new Map();               // id -> contenido, para reintentos de cifrado del teléfono
 let cola = Promise.resolve();                  // procesa de a un mensaje, en orden
 
@@ -169,7 +169,7 @@ async function manejarFalloCerebro(chatJid, e, textoUsuario = null) {
     return;
   }
   info(`error con el cerebro: ${e?.message || e}`);
-  await enviar(chatJid, `🤖 Pedro: tuve un problema con mi cerebro (${String(e?.message || e).slice(0, 120)}).`);
+  await enviar(chatJid, `🤖 Orión: tuve un problema con mi cerebro (${String(e?.message || e).slice(0, 120)}).`);
 }
 
 async function atenderAudio(msg, c) {
@@ -200,7 +200,7 @@ async function atenderAudio(msg, c) {
     return;
   }
   info(`nota de voz (${c.segundos}s): ${texto.slice(0, 80)}`);
-  await enviar(chatJid, `🤖 Pedro: 🎙️ entendí: «${texto.length > 300 ? `${texto.slice(0, 300)}…` : texto}»`);
+  await enviar(chatJid, `🤖 Orión: 🎙️ entendí: «${texto.length > 300 ? `${texto.slice(0, 300)}…` : texto}»`);
   await hablarConCerebro(chatJid, textoParaCerebro(texto, { notaDeVoz: true }));
 }
 
@@ -308,7 +308,7 @@ async function conectar() {
     logger,
     browser: Browsers.windows('Chrome'),
     markOnlineOnConnect: false,          // tu teléfono sigue recibiendo notificaciones normal
-    syncFullHistory: false,                // no pide el historial completo (Pedro no lo usa ni lo guarda)
+    syncFullHistory: false,                // no pide el historial completo (Orión no lo usa ni lo guarda)
     generateHighQualityLinkPreview: false,
     getMessage: async (key) => cacheEnviados.get(key.id),
   });
@@ -319,7 +319,7 @@ async function conectar() {
     const { connection, lastDisconnect, qr } = u;
     if (qr) {
       console.log('');
-      console.log('  Vincula a Pedro con tu WhatsApp:');
+      console.log('  Vincula a Orión con tu WhatsApp:');
       console.log('  En tu celular: WhatsApp > Ajustes (o los tres puntos) > Dispositivos vinculados > Vincular un dispositivo');
       console.log('  y escanea este código (se renueva solo cada ~20 s):');
       console.log('');
@@ -328,7 +328,7 @@ async function conectar() {
     if (connection === 'open') {
       intentosReconexion = 0;
       await actualizarPropios();
-      info('Pedro conectado a WhatsApp. Escríbele en "Mensajes para ti mismo" (tu propio chat).');
+      info('Orión conectado a WhatsApp. Escríbele en "Mensajes para ti mismo" (tu propio chat).');
       return;
     }
     if (connection !== 'close' || cerrando) return;
@@ -336,14 +336,14 @@ async function conectar() {
     const codigo = lastDisconnect?.error?.output?.statusCode;
     if (codigo === DisconnectReason.loggedOut) {
       salir(2, [
-        'WhatsApp cerró la sesión de Pedro (lo desvinculaste o expiró).',
+        'WhatsApp cerró la sesión de Orión (lo desvinculaste o expiró).',
         `Para volver a vincularlo: borra la carpeta ${CARPETA_AUTH}`,
-        'y vuelve a iniciar Pedro por WhatsApp para escanear un código nuevo.',
+        'y vuelve a iniciar Orión por WhatsApp para escanear un código nuevo.',
       ]);
       return;
     }
     if (codigo === DisconnectReason.connectionReplaced) {
-      salir(3, ['Otra copia de Pedro por WhatsApp abrió esta misma sesión. Cierra una de las dos ventanas.']);
+      salir(3, ['Otra copia de Orión por WhatsApp abrió esta misma sesión. Cierra una de las dos ventanas.']);
       return;
     }
     if (codigo === DisconnectReason.forbidden) {
@@ -365,19 +365,19 @@ async function conectar() {
 // ------------------------------------------------------------------ arranque y cierre
 process.on('SIGINT', () => {
   if (cerrando) process.exit(0);
-  info('cerrando Pedro por WhatsApp (la sesión queda vinculada)...');
+  info('cerrando Orión por WhatsApp (la sesión queda vinculada)...');
   salir(0, ['Hasta luego.']);
 });
-process.on('SIGTERM', () => salir(0, ['Pedro por WhatsApp detenido.']));
+process.on('SIGTERM', () => salir(0, ['Orión por WhatsApp detenido.']));
 process.on('unhandledRejection', (e) => info(`error no manejado: ${e?.stack || e}`));
 
 const [mayor] = process.versions.node.split('.').map(Number);
 if (mayor < 20) {
-  console.error(`Pedro por WhatsApp necesita Node.js 20 o más nuevo (tienes ${process.versions.node}).`);
+  console.error(`Orión por WhatsApp necesita Node.js 20 o más nuevo (tienes ${process.versions.node}).`);
   process.exit(1);
 }
 
 fs.mkdirSync(CARPETA, { recursive: true });
-info(`Pedro por WhatsApp · cerebro en ${API}`);
+info(`Orión por WhatsApp · cerebro en ${API}`);
 if (!(await cerebroEnLinea(API))) info('ojo: el cerebro no responde ahora; enciéndelo con Jarvis.bat (opción 1).');
 await conectar();

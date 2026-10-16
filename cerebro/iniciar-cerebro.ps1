@@ -1,8 +1,8 @@
-﻿# Pedro - cerebro nuevo (motor de Claude Code). Lo abre Jarvis.bat; no hace falta correrlo a mano.
+﻿# Orión - cerebro nuevo (motor de Claude Code). Lo abre Jarvis.bat; no hace falta correrlo a mano.
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$Host.UI.RawUI.WindowTitle = "Pedro - cerebro (no cerrar)"
+$Host.UI.RawUI.WindowTitle = "Orión - cerebro (no cerrar)"
 try { Start-Transcript -Path (Join-Path $PSScriptRoot "arranque.log") -Force | Out-Null } catch {}
 Write-Host ("Arranque: " + (Get-Date))
 
