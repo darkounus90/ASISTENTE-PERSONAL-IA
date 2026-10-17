@@ -685,7 +685,7 @@ def abrir_url(url: str) -> str:
 
 # ---------------------------------------------------------------- abrir archivos y carpetas
 # Solo documentos y carpetas dentro de las carpetas de Andres; nunca programas ni scripts.
-_RAICES_ABRIR = ("/mnt/c/Users/PC", "/mnt/c/dev", "/mnt/c/dev_grafo")
+_RAICES_ABRIR = ("/mnt/c/Users/PC", "/mnt/c/dev")
 _EJECUTABLE = re.compile(r"\.(exe|bat|cmd|com|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|msi|msp|lnk|scr|hta|jar|cpl|"
                          r"reg|pif|application|appref-ms|url|scf|inf|dll|sys|py|pyw|sh)$", re.I)
 

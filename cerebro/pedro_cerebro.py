@@ -47,7 +47,7 @@ MODELO = os.environ.get("PEDRO_MODELO", "claude-sonnet-5-5")
 MODELO_RAPIDO = os.environ.get("PEDRO_MODELO_RAPIDO", MODELO)
 ESFUERZO = os.environ.get("PEDRO_ESFUERZO", "")   # low|medium|high (vacío = por defecto)
 DEV = os.environ.get("PEDRO_DEV", r"C:\dev")
-GRAFO = os.environ.get("PEDRO_GRAFO", r"C:\dev_grafo")
+GRAFO = os.environ.get("PEDRO_GRAFO", r"C:\dev\_grafo")
 MCP_MODO = os.environ.get("PEDRO_MCP", "wsl")          # wsl | local (pruebas en Linux)
 DISTRO = os.environ.get("PEDRO_WSL_DISTRO", "Ubuntu")
 PENSAR = os.environ.get("PEDRO_PENSAR", "0") == "1"   # 1 = razonamiento extendido (más lento)
@@ -176,7 +176,7 @@ def prompt_sistema() -> str:
               f"# Tu memoria ({JARVIS / 'MEMORY.md'})\n" + _leer("MEMORY.md")]
     if apodos:
         partes.append("# Apodos de proyectos (lo que dice Andres → carpeta en C:\\dev)\n" + apodos)
-    partes.append(f"# Entorno\n- Proyectos: {DEV}. Grafo de Obsidian: {GRAFO}. Archivos de Orión: {JARVIS}.\n"
+    partes.append(f"# Entorno\n- Proyectos: {DEV}. Segundo cerebro (su grafo propio): {GRAFO}. Archivos de Orión: {JARVIS}.\n"
                   "- Bash corre en Git Bash de Windows: usa rutas como /c/dev/proyecto.\n"
                   "- Cada mensaje trae al final la hora local de Andres entre paréntesis.")
     return "\n\n".join(p for p in partes if p)
@@ -261,6 +261,13 @@ class Cerebro:
         self.contexto = 0                # tokens que se reenvían en cada pregunta
         self.rotar = False
         self.recientes: list[tuple[str, str]] = []
+        self.memoria = None
+        if not prueba:
+            try:
+                from memoria import Memoria
+                self.memoria = Memoria(info, cargar_secretos, MODELO_RAPIDO)
+            except Exception as e:  # noqa: BLE001
+                info(f"memoria del grafo no disponible: {e!r}")
 
     # --- sesión -------------------------------------------------------
     def _archivo_sesion(self) -> Path:
@@ -356,6 +363,8 @@ class Cerebro:
                      f"lista en {time.time() - t:.1f}s")
                 if not intento:
                     self.sesion_id = None
+                    if self.memoria:
+                        self.memoria.nueva_conversacion()
                 self.costo_sesion = 0.0
                 self.contexto = 0
                 return
@@ -412,10 +421,16 @@ class Cerebro:
                     nueva, self.rotar = True, False
                     resumen = self._resumen()
                     info(f"conversación renovada (contexto {self.contexto} tokens > {CONTEXTO_MAX}); llevo lo último")
+                    if self.memoria:
+                        self.memoria.consolidar_luego()   # lo de la charla anterior queda en el grafo
                 if self.cliente is None or nueva:
                     await self._conectar(nueva=nueva)
                 self.pol.nuevo_turno(texto, prueba=self.prueba)
                 consulta = f"{texto}\n\n(hora local: {ahora_legible()})"
+                recuerdo = self.memoria.contexto_para(texto) if self.memoria else ""
+                if recuerdo:
+                    consulta = (f"(De tu segundo cerebro, por si aplica; no lo leas en voz alta:\n{recuerdo})\n\n"
+                                + consulta)
                 if resumen:
                     consulta = (f"(Contexto: seguimos la misma charla; lo último que hablamos fue:\n{resumen}\n"
                                 "No lo repitas, solo úsalo para entender.)\n\n" + consulta)
@@ -528,6 +543,8 @@ class Cerebro:
                     info(f"  costo del turno: ${self.ultima.get('costo_usd', 0):.4f} USD · sesión: "
                          f"${self.ultima['costo_sesion']:.2f} · contexto: {self.contexto} tokens")
                 self.recientes = (self.recientes + [(texto, self.ultima.get("respuesta", ""))])[-6:]
+                if self.memoria:
+                    self.memoria.registrar(texto, self.ultima.get("respuesta", ""), error=bool(self.ultima.get("error")))
                 if self.contexto > CONTEXTO_MAX and not self.prueba:
                     self.rotar = True
                 info(f"{'[prueba] ' if self.prueba else ''}turno listo en {time.time() - t0:.1f}s "
@@ -667,6 +684,8 @@ def crear_app():
         except Exception:  # noqa: BLE001
             pass
         for c in cerebros.values():
+            if c.memoria and c.memoria.pendientes:
+                await c.memoria.consolidar(espera=20)   # lo último que hablamos queda en el grafo
             await c._desconectar()
 
     stt = {"modelo": None}

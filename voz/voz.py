@@ -1207,7 +1207,7 @@ def limpiar_para_voz(txt: str) -> str:
     txt = re.sub(r"`([^`]*)`", r"\1", txt)
     txt = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", txt)
     txt = re.sub(r"https?://\S+", "el enlace", txt)
-    txt = re.sub(r"\[\[([^\]|]+)(\|[^\]]*)?\]\]", r"\1", txt)      # [[nota]] de Obsidian
+    txt = re.sub(r"\[\[([^\]|]+)(\|[^\]]*)?\]\]", r"\1", txt)      # [[nota]] del grafo
     txt = _EMOJI.sub("", txt)
     txt = re.sub(r"^\s*(\d+[.)]|[-•*])\s+", "", txt, flags=re.M)   # viñetas y listas numeradas
     txt = re.sub(r"[*_#>|~]+", "", txt)

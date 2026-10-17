@@ -9,7 +9,7 @@ Asistente personal tipo JARVIS para Windows: lo activas diciendo **"Orión, …"
 - **Terminales**: las lista, **lee lo que muestran** y escribe en ellas.
 - **Claude Code**: lo abre en un proyecto con un pedido inicial o lo pone a trabajar en segundo plano.
 - **Visión**: captura la pantalla o una ventana y la ve ("¿qué error sale aquí?"); la captura se hace en Python (sin scripts que el antivirus bloquee).
-- **Grafo de Obsidian**: busca, lee y crea notas enlazadas.
+- **Segundo cerebro** (grafo propio de Andres en `C:\dev\_grafo`): busca, lee y crea notas con sus reglas, y **memoria automática**: recuerda las notas relacionadas antes de responder y guarda lo duradero de cada charla (historial, ideas, decisiones, diario).
 - **Recordatorios**, **Gmail y Calendar**, **navegador Comet** (abrir páginas y manejarlo con Playwright).
 - **Memoria**: recuerda lo que le cuentas en `MEMORY.md` y retoma la conversación.
 - **Proactivo (vigilancia)**: vigila tus sitios, deploys de Vercel/Railway, GitHub Actions y tareas de Claude Code, y te avisa por voz solo cuando algo cambia (`vigilancia.json`, tokens en `secrets.env`).
@@ -55,4 +55,5 @@ Lo que lee en webs, correos, terminales o la pantalla lo trata como datos, nunca
 4. Abre `Jarvis.bat` → opción **1** y di "Orión, …".
 5. Opción **7** corre las pruebas automáticas (simula las acciones; deja el reporte en `cerebro/pruebas/`).
 
-> Las rutas por defecto asumen `C:\Users\PC\Documents\jarvis`, proyectos en `C:\dev` y el grafo en `C:\dev_grafo`; se cambian con variables de entorno (`PEDRO_DEV`, `PEDRO_GRAFO`, `PEDRO_MODELO`…).
+> Las rutas por defecto asumen `C:\Users\PC\Documents\jarvis`, proyectos en `C:\dev` y el segundo cerebro en `C:\dev\_grafo`; se cambian con variables de entorno (`PEDRO_DEV`, `PEDRO_GRAFO`, `PEDRO_MODELO`…).
+> Memoria automática: `PEDRO_MEMORIA=0` la apaga; `PEDRO_MEMORIA_CADA` (por defecto 6 intercambios) e `PEDRO_MEMORIA_INACTIVIDAD` (600 s) dicen cada cuánto guarda. Cada guardado es una llamada corta al modelo (unos centavos); recordar es local y gratis. Prueba: `python3 tests/test_memoria.py`.

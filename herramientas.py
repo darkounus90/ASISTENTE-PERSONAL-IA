@@ -105,7 +105,7 @@ if agente == "simple":
     print("herramientas: DESACTIVADAS (modo conversación rápida)")
 else:
     print(f"herramientas: ACTIVADAS ({agente}): {', '.join(herramientas)}")
-    print("herramientas: grafo de Obsidian " + ("CONECTADO (C:\\dev_grafo)" if Path("/mnt/c/dev_grafo").is_dir() else "NO encontrado en C:\\dev_grafo"))
+    print("herramientas: segundo cerebro " + ("CONECTADO (C:\\dev\\_grafo)" if Path("/mnt/c/dev/_grafo").is_dir() else "NO encontrado en C:\\dev\\_grafo"))
     print("herramientas: Google " + ("CONECTADO" if google_ok else "sin conectar (menú opción 9)"))
     print("herramientas: control de Comet " + ("LISTO (Playwright MCP vía npx)" if control_comet
           else "NO disponible: falta Node.js en Windows (instálalo desde nodejs.org)"))

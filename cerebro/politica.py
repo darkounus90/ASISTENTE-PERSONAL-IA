@@ -129,7 +129,7 @@ _LECTURA = {
 }
 _LIBRE_MCP = _LECTURA | {
     "abrir_proyecto", "abrir_app", "abrir_claude_code", "abrir_terminal", "crear_recordatorio",
-    "borrar_recordatorio", "cancelar_tarea", "crear_nota", "agregar_a_nota", "abrir_en_comet",
+    "borrar_recordatorio", "cancelar_tarea", "crear_nota", "agregar_a_nota", "anotar_diario", "abrir_en_comet",
     "abrir_comet_pedro", "abrir_archivo", "abrir_url", "rutina", "vigilar_sitio", "browser_navigate", "browser_navigate_back", "browser_hover",
     "browser_press_key", "browser_resize", "browser_close",
 }
