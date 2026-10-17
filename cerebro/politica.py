@@ -75,7 +75,33 @@ _PELIGRO_SHELL = re.compile(r"`|\$\(|<\(|>\(|[<>]|\|\||&(?!&)")
 
 
 def _segmentos(cmd: str) -> list[str]:
-    return [s.strip() for s in re.split(r"&&|;|\|", cmd) if s.strip()]
+    """Parte en &&, ; y | como bash: lo que está entre comillas no se parte
+    (rg "model|haiku" es UNA búsqueda, no una tubería)."""
+    partes, actual, i, comilla = [], [], 0, ""
+    while i < len(cmd):
+        c = cmd[i]
+        if comilla:
+            if c == "\\" and comilla == '"' and i + 1 < len(cmd):
+                actual.append(cmd[i:i + 2])
+                i += 2
+                continue
+            if c == comilla:
+                comilla = ""
+        elif c == "\\" and i + 1 < len(cmd):      # \| fuera de comillas es literal en bash
+            actual.append(cmd[i:i + 2])
+            i += 2
+            continue
+        elif c in "'\"":
+            comilla = c
+        elif cmd.startswith("&&", i) or c in ";|":
+            partes.append("".join(actual))
+            actual = []
+            i += 2 if c == "&" else 1
+            continue
+        actual.append(c)
+        i += 1
+    partes.append("".join(actual))
+    return [s.strip() for s in partes if s.strip()]
 
 
 def _bash_seguro(cmd: str) -> bool:
@@ -119,7 +145,7 @@ _TITULO_PROPIO = re.compile(r"^(pedro|orion|orión)-[\w .()-]{1,70}$", re.I)   #
 
 # Un "sí" claro: frase corta que empieza con una afirmación y no trae ninguna duda ni condición.
 _AFIRMACION = re.compile(
-    r"^(s[ií]+|sip|dale|h[aá]zlo|h[aá]gale|hazle|m[eé]tele|confirmo|confirmado|adelante|procede|proceda|"
+    r"^(s[ií]+|sip|dale|h[aá]zlo|h[aá]gal[eo]|hazle|m[eé]tele|confirmo|confirmado|adelante|procede|proceda|"
     r"de una|aprobado|autorizo|te autorizo|te doy permiso|tienes permiso|claro que s[ií]|ok dale|listo dale|"
     r"ok|okay|okey|listo|claro|vale|correcto|exacto|perfecto)\b", re.I)
 _CORTA_SOLO = re.compile(r"^(ok|okay|okey|listo|claro|vale|correcto|exacto|perfecto)[.!¡ ]*$", re.I)
@@ -133,7 +159,7 @@ def _base(nombre: str) -> str:
 
 
 def es_afirmativo(texto: str) -> bool:
-    t = re.sub(r"^\s*(\[voz\]\s*)?(\([^)]*\)\s*)*", "", texto or "")
+    t = re.sub(r"^\s*((\[(voz|sin nombre|whatsapp)\]|\([^)]*\))\s*)*", "", texto or "", flags=re.I)
     t = re.sub(r"\(hora local:[^)]*\)", "", t)
     t = re.sub(r"^((oye|hey|ey)\s+)?(pedro|ori[oó]n)[\s,.:!]*", "", t.strip(), flags=re.I).strip()
     if not t or len(t.split()) > 8 or not _AFIRMACION.match(t):
@@ -295,6 +321,11 @@ if __name__ == "__main__":
         (*B("npm test"), LIBRE), (*B("npm run lint 2>/dev/null"), LIBRE), (*B("node -v 2>&1"), LIBRE),
         (*B("npx tsc --noEmit"), LIBRE), (*B("rg 'contacto' src"), LIBRE), (*B("find . -name '*.tsx'"), LIBRE),
         (*B("grep -n Hero src/app/page.tsx"), LIBRE), (*B("head -50 README.md"), LIBRE),
+        # | entre comillas es parte del patrón, no una tubería (antes pedían el sí)
+        (*B("rg -n -i \"model|haiku|sonnet|opus\" /c/x/pedro_cerebro.py | head -40"), LIBRE),
+        (*B("grep -n -i \"model\\|haiku\" /c/x/a.py | head -40"), LIBRE), (*B("rg -n 'A;B&&C' src"), LIBRE),
+        (*B("rg 'x' src | tee a.txt"), CONFIRMAR), (*B("grep \\\" | rm x \\\""), CONFIRMAR),
+        (*B("grep \"$(rm -rf src)\" a"), CONFIRMAR),
         # servidores
         (*B("npm run dev"), SERVIDOR), (*B("cd /c/dev/x && pnpm dev"), SERVIDOR),
         (*B("npm test", run_in_background=True), SERVIDOR),

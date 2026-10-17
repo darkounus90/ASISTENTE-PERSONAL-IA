@@ -278,6 +278,9 @@ class Cerebro:
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": MODELO_RAPIDO,
             "ANTHROPIC_SMALL_FAST_MODEL": MODELO_RAPIDO,
             "BASH_DEFAULT_TIMEOUT_MS": "60000",
+            # Con 10 reintentos (por defecto) un 503 del gateway te deja ~1 min en silencio;
+            # con pocos falla rápido y te dice que lo repitas.
+            "CLAUDE_CODE_MAX_RETRIES": os.environ.get("PEDRO_REINTENTOS", "3"),
             "MAX_MCP_OUTPUT_TOKENS": "60000",
             **({} if PENSAR else {"MAX_THINKING_TOKENS": "0"}),                 # capturas de pantalla
             "PYTHONIOENCODING": "utf-8",
@@ -466,6 +469,11 @@ class Cerebro:
                             await cola.put(error_amigable(str(detalle)) or
                                            f"Tuve un problema con mi cerebro: {str(detalle)[:160]}")
                         self.ultima["costo_usd"] = msg.total_cost_usd
+                        u = msg.usage or {}
+                        if u:
+                            info(f"  tokens: entrada {u.get('input_tokens', 0)} · caché leída "
+                                 f"{u.get('cache_read_input_tokens', 0)} · caché escrita "
+                                 f"{u.get('cache_creation_input_tokens', 0)} · salida {u.get('output_tokens', 0)}")
                 terminado = not str(self.ultima.get("error") or "").startswith("sin respuesta")
                 self.ultima["tiempos"] = {"primera_palabra": round(primera or 0, 2),
                                           "total": round(time.time() - t0, 2)}

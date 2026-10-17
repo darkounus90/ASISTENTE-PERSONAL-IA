@@ -4,6 +4,8 @@
 #   "numpy>=1.24,<2.3",
 #   "sounddevice>=0.4.6",
 #   "faster-whisper>=1.1",
+#   "nvidia-cublas-cu12; sys_platform == 'win32'",
+#   "nvidia-cudnn-cu12>=9,<10; sys_platform == 'win32'",
 #   "openwakeword==0.6.0",
 #   "onnxruntime>=1.17",
 #   "edge-tts>=6.1",
@@ -65,8 +67,9 @@ VS_URL = os.environ.get("VOICESTUDIO_URL", "http://127.0.0.1:3900").rstrip("/")
 VS_VOZ = os.environ.get("VOICESTUDIO_VOZ", "")
 VS_MODELO = os.environ.get("VOICESTUDIO_MODELO", "omnivoice")
 VS_ESTILO = os.environ.get("VOICESTUDIO_ESTILO", "")   # opcional, ej. "acento colombiano, tono cálido"
-STT_MODELO = os.environ.get("JARVIS_STT", "small")              # tiny/base/small/medium
-STT_DEVICE = os.environ.get("JARVIS_STT_DEVICE", "cpu")         # cpu o cuda
+# Vacío = el mejor según el equipo: large-v3-turbo en GPU (mucho más preciso), small en CPU
+STT_MODELO = os.environ.get("JARVIS_STT", "")                   # tiny/base/small/medium/large-v3-turbo
+STT_DEVICE = os.environ.get("JARVIS_STT_DEVICE", "auto")        # auto (GPU si hay), cuda o cpu
 UMBRAL_WAKE = float(os.environ.get("JARVIS_UMBRAL", "0.5"))
 # "nombre": Whisper escucha y se activa al oír "Jarvis" (funciona con acento en español)
 # "hey": detector openWakeWord "Hey Jarvis" (entrenado en inglés)
@@ -102,7 +105,10 @@ MIC = os.environ.get("JARVIS_MIC")                              # índice o nomb
 
 SR = 16000          # Hz del micrófono (lo que esperan Whisper y openWakeWord)
 CHUNK = 1280        # 80 ms por bloque
-SILENCIO_FIN = float(os.environ.get("JARVIS_SILENCIO", "1.4"))  # seg. de silencio que cierran tu frase
+# seg. de silencio que cierran tu frase (si quedas a medias, "y…", "que…", sigue escuchando igual)
+SILENCIO_FIN = float(os.environ.get("JARVIS_SILENCIO", "1.0"))
+AVISO_ESPERA = float(os.environ.get("JARVIS_AVISO_ESPERA", "15"))   # seg. callado antes de decir "dame un momento" (0 = nunca)
+TIC = os.environ.get("JARVIS_TIC", "1") != "0"   # tic suave al entenderte: sabes que ya está pensando
 MAX_FRASE = 25      # seg. máximos por frase
 HISTORIAL = 12      # mensajes que recuerda en la conversación hablada
 SR_TTS = 24000      # Hz de la voz sintetizada
@@ -531,9 +537,43 @@ def estado_reposo() -> None:
     poner_estado("dormido" if _DORMIDO[0] else "escuchando")
 
 
+PID_ARCHIVO = os.path.join(RAIZ, "tmp", "voz.pid")
+
+
+def unica_instancia() -> None:
+    """Si ya hay otra voz escuchando, la cierro: dos a la vez oyen lo mismo, mandan dos pedidos
+    y el cerebro los atiende en fila (la respuesta tarda el doble y sale mezclada)."""
+    try:
+        viejo = int(open(PID_ARCHIVO, encoding="utf-8").read().strip())
+    except (OSError, ValueError):
+        viejo = 0
+    if viejo and viejo != os.getpid() and sys.platform == "win32":
+        import subprocess
+        # solo si ese PID sigue siendo un voz.py (Windows recicla los números de proceso)
+        cmd = (f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={viejo}' -ErrorAction SilentlyContinue; "
+               "if ($p -and $p.CommandLine -match 'voz\\.py') { taskkill /PID $p.ProcessId /T /F | Out-Null; 'cerrada' }")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=15)
+            if "cerrada" in r.stdout:
+                info("Cerré otra voz de Orión que seguía abierta.")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        os.makedirs(os.path.dirname(PID_ARCHIVO), exist_ok=True)
+        with open(PID_ARCHIVO, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
 def _al_salir() -> None:
     if _ESTADO["t"]:   # solo si esta instancia llegó a escribir estado
         poner_estado("apagado", forzar=True)
+    try:
+        if open(PID_ARCHIVO, encoding="utf-8").read().strip() == str(os.getpid()):
+            os.remove(PID_ARCHIVO)
+    except (OSError, ValueError):
+        pass
 
 
 _MANEJADOR_CONSOLA: list = []
@@ -947,20 +987,44 @@ def beep(freq: float = 880, dur: float = 0.12) -> None:
 
 
 # ----------------------------------------------------------------- Oír (Whisper)
+_BEAM = [1]   # en GPU sobra potencia: beam 5 entiende mejor nombres y frases raras
+
+
+def _dlls_cuda() -> None:
+    """Windows: cuBLAS/cuDNN vienen en los paquetes pip nvidia-*; hay que decirle a Python dónde están."""
+    import glob
+    import importlib.util
+
+    spec = importlib.util.find_spec("nvidia")
+    for raiz in (spec.submodule_search_locations if spec else []):
+        for d in glob.glob(os.path.join(raiz, "*", "bin")):
+            try:
+                os.add_dll_directory(d)
+            except (OSError, AttributeError):
+                pass
+            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+
+
 def cargar_stt():
     from faster_whisper import WhisperModel
 
-    if STT_DEVICE == "cuda":
-        try:
-            m = WhisperModel(STT_MODELO, device="cuda", compute_type="float16")
-            m.transcribe(np.zeros(SR, dtype=np.float32), language="es")
-            info(f"Oído: Whisper {STT_MODELO} en GPU")
-            return m
-        except Exception as e:  # noqa: BLE001
-            info(f"GPU no disponible para Whisper ({e.__class__.__name__}); uso CPU")
-    m = WhisperModel(STT_MODELO, device="cpu", compute_type="int8")
+    if STT_DEVICE in ("auto", "cuda"):
+        _dlls_cuda()
+        for modelo in dict.fromkeys([STT_MODELO or "large-v3-turbo", "small"]):
+            try:
+                m = WhisperModel(modelo, device="cuda", compute_type="float16")
+                # la primera vez la GPU compila sus kernels (~20 s); después es inmediato
+                list(m.transcribe(np.zeros(SR, dtype=np.float32), language="es")[0])
+                _BEAM[0] = 5
+                info(f"Oído: Whisper {modelo} en GPU")
+                return m
+            except Exception as e:  # noqa: BLE001
+                info(f"Whisper {modelo} no cargó en GPU ({e.__class__.__name__}: {str(e)[:120]})")
+        info("Uso la CPU para oír (más lento y entiende menos)")
+    modelo = STT_MODELO or "small"
+    m = WhisperModel(modelo, device="cpu", compute_type="int8")
     m.transcribe(np.zeros(SR, dtype=np.float32), language="es")  # calentar
-    info(f"Oído: Whisper {STT_MODELO} en CPU")
+    info(f"Oído: Whisper {modelo} en CPU")
     return m
 
 
@@ -968,7 +1032,45 @@ def cargar_stt():
 VOCABULARIO = os.environ.get("JARVIS_VOCABULARIO", (
     "Orión, Claude Code, 18 Kilates, la joyería, CHECK, Onnyx, Onnyx Software, VS Code, "
     "Comet, Vercel, Railway, Supabase, Next.js, NestJS, Notion, Obsidian, Dropi, Motojaponesa, "
-    "recordatorio, abre la carpeta, abre el proyecto, lanza Claude Code."))
+    "recordatorio, abre la carpeta, abre el proyecto, lanza Claude Code. "
+    # respuestas cortas: sin contexto Whisper escribía "C," por "sí" y "Aslo" por "hazlo"
+    "Sí, hazlo. Dale. Hágale. No. Para. Listo."))
+
+# Correcciones de lo que Whisper suele escuchar mal. Las de frase completa (^…$) solo cambian
+# una respuesta suelta, para no tocar palabras normales dentro de una frase.
+# Agrega las tuyas en voz\correcciones.json: {"regex": "reemplazo"}.
+_CORRECCIONES_BASE = {
+    r"^\W*(?:c|ci|se|sii+|s[ií]\s*s[ií])\W*$": "Sí.",
+    r"^\W*(?:aslo|azlo|haslo|hasl[oa]|as[ií] lo)\W*$": "Hazlo.",
+    r"^\W*(?:h?[aá]rgalo|h?[aá]galo|h?[aá]gale)(\W+s[ií])?\W*$": r"Hágalo\1.",
+    r"^\W*(?:dal[eé]|bale|vale\s+dale)\W*$": "Dale.",
+    r"\b18\s+kil[oó]metros\b": "18 Kilates",
+    r"\b(?:[oó]nix|onyx|oni[xs])\b": "Onnyx",
+}
+
+
+def _cargar_correcciones() -> list:
+    reglas = dict(_CORRECCIONES_BASE)
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "correcciones.json")
+    extra = _leer_json(ruta) if os.path.exists(ruta) else None
+    if isinstance(extra, dict):
+        reglas.update({k: v for k, v in extra.items() if not k.startswith("_") and isinstance(v, str)})
+    out = []
+    for patron, cambio in reglas.items():
+        try:
+            out.append((re.compile(patron, re.IGNORECASE), cambio))
+        except re.error as e:
+            info(f"⚠️  Corrección inválida en correcciones.json ({patron!r}): {e}")
+    return out
+
+
+def corregir(texto: str) -> str:
+    for patron, cambio in _CORRECCIONES:
+        texto = patron.sub(cambio, texto)
+    return texto
+
+
+_CORRECCIONES = _cargar_correcciones()
 
 
 _A_MEDIAS = re.compile(
@@ -997,11 +1099,49 @@ def escuchar_completo(stt, audio: np.ndarray) -> str:
     return texto
 
 
+# Frases que Whisper "alucina" con ruido, música o silencio (vienen de subtítulos de YouTube)
+_ALUCINACION = re.compile(
+    r"^\W*(?:¡?suscr[ií]bete.*|gracias(?: por ver.*)?|subt[ií]tulos.*|amara\.org.*|"
+    r"hasta la pr[oó]xima.*|m[uú]sica|aplausos|risas|\.+)\W*$", re.IGNORECASE)
+# Respuestas de una palabra que sí cuentan (p. ej. el "sí" que confirma un commit)
+_CORTA = re.compile(r"^\W*(s[ií]|no|dale|h[aá]zlo|h[aá]gal[oe](\W+s[ií])?|claro|ok|okay|vale|correcto|exacto|perfecto|"
+                    r"ese|esa|ambos|ambas|todos|ninguno|primero|segundo|tercero|uno|dos|tres)\W*$",
+                    re.IGNORECASE)
+_CONFIANZA = [0.0]   # avg_logprob de la última transcripción (0 = segura; < -0,8 = dudosa)
+CONFIANZA_MIN = float(os.environ.get("JARVIS_CONFIANZA_MIN", "-0.75"))
+
+
 def transcribir(stt, audio: np.ndarray) -> str:
     f = audio.astype(np.float32) / 32768.0
-    segs, _ = stt.transcribe(f, language="es", beam_size=1, vad_filter=True,
+    segs, _ = stt.transcribe(f, language="es", beam_size=_BEAM[0], vad_filter=True,
                              initial_prompt=VOCABULARIO, condition_on_previous_text=False)
-    return " ".join(s.text.strip() for s in segs).strip()
+    textos, peso, suma = [], 0, 0.0
+    for s in segs:
+        if s.no_speech_prob > 0.6 and s.avg_logprob < -1.0:   # regla de Whisper: no era voz
+            continue
+        t = s.text.strip()
+        if not t or _ALUCINACION.match(t):
+            continue
+        textos.append(t)
+        peso += len(t)
+        suma += s.avg_logprob * len(t)
+    _CONFIANZA[0] = suma / peso if peso else -9.0
+    return corregir(" ".join(textos).strip())
+
+
+def para_mi(texto: str) -> str | None:
+    """Frase dicha SIN el nombre (seguimiento o interrupción): ¿parece para Orión?
+    None = ruido de fondo (juego, TV, otra persona); si no, el texto marcado para que el
+    cerebro decida si responde o lo ignora."""
+    dijo, resto = buscar_nombre(texto)
+    if dijo:
+        return resto or None
+    if len(texto.split()) < 2 and not _CORTA.match(texto):
+        return None
+    if _CONFIANZA[0] < CONFIANZA_MIN:
+        info(f"(transcripción dudosa {_CONFIANZA[0]:.2f}: parece ruido de fondo)")
+        return None
+    return f"[voz][sin nombre] {texto}"
 
 
 # ----------------------------------------------------------------- Hablar (voz neural)
@@ -1180,6 +1320,9 @@ def extraer_frases(buf: str, primera: bool) -> tuple[list[str], str]:
 historial: list[dict] = []
 _INTERRUMPIDA = [False]   # ¿la última respuesta fue cortada por Andres?
 _MARCA = re.compile(r"\s*\[Andres me interrumpió aquí\]")
+_IGNORO = re.compile(r"^\s*\[ignoro\]", re.IGNORECASE)   # el cerebro decidió que no le hablaban a él
+_IGNORADA = [False]   # no sigo escuchando sin nombre tras esto (era ruido, o me pediste parar)
+_STT: list = [None]   # Whisper, para oír "Orión, para" mientras pienso
 HISTORIAL_ARCHIVO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "historial.json")
 HISTORIAL_HORAS = float(os.environ.get("JARVIS_HISTORIAL_HORAS", "8"))
 
@@ -1246,10 +1389,13 @@ def jarvis_en_linea() -> bool:
 def responder(texto: str, wake) -> list | None:
     """Pide la respuesta en streaming y la va diciendo frase por frase.
     Si dices "Hey Jarvis" mientras habla, se calla."""
-    contenido = texto if texto.startswith("[voz]") else f"[voz] {texto}"
+    marca = next((m for m in ("[voz][sin nombre]", "[voz]") if texto.startswith(m)), "")
+    cuerpo = texto[len(marca):].strip()
+    marca = marca or "[voz]"
     if _INTERRUMPIDA[0]:
-        contenido = contenido.replace("[voz]", "[voz] (te interrumpí mientras hablabas)", 1)
+        marca += " (te interrumpí mientras hablabas)"
         _INTERRUMPIDA[0] = False
+    contenido = f"{marca} {cuerpo}"
     historial.append({"role": "user", "content": contenido})
     poner_estado("pensando", pedro="")
     cancelar = threading.Event()
@@ -1287,6 +1433,8 @@ def responder(texto: str, wake) -> list | None:
             f = frases_q.get()
             if f is None:
                 return
+            if _IGNORO.match(f):
+                continue
             limpio = limpiar_para_voz(f)
             if not limpio:
                 continue
@@ -1308,6 +1456,8 @@ def responder(texto: str, wake) -> list | None:
     t_loc = threading.Thread(target=locutor, daemon=True)
     t_prod.start()
     t_loc.start()
+    if TIC:
+        beep(1175, 0.05)   # después de lanzar el pedido: no le resta tiempo
 
     vaciar_cola()
     interrumpido = False
@@ -1319,7 +1469,16 @@ def responder(texto: str, wake) -> list | None:
         import msvcrt  # Windows: detectar teclas sin bloquear
     except ImportError:
         msvcrt = None
+    oida: list = []                     # mientras pienso: lo que vas diciendo, por si es "Orión, para"
+    callado = 0
+    parado = False
+    avisos_espera = [(AVISO_ESPERA, "Dame un momento, estoy en eso."),
+                     (AVISO_ESPERA * 3, "Sigo trabajando en eso, ya casi.")] if AVISO_ESPERA > 0 else []
     while t_loc.is_alive() or rep.ocupado():
+        # Si el cerebro lleva rato encadenando herramientas sin decir nada, aviso que sigo vivo
+        # (no entra al historial: es solo para que no parezca colgado)
+        if avisos_espera and not completo and time.time() - t0 > avisos_espera[0][0]:
+            frases_q.put(avisos_espera.pop(0)[1])
         if _ATAJO.is_set():             # atajo de teclado: me callo y te escucho (turno lo limpia)
             cancelar.set()
             rep.callar()
@@ -1338,7 +1497,25 @@ def responder(texto: str, wake) -> list | None:
         except queue.Empty:
             continue
         recientes.append(bloque)
-        if INTERRUPCION:
+        # Mientras pienso, el ruido NO me interrumpe (un juego o la TV cancelaban el pedido),
+        # pero escucho por si me dices "Orión, para": transcribo cada frase al terminar.
+        if not (primer_audio or rep.ocupado()) and _STT[0] is not None:
+            if rms(bloque) > umbral_voz():
+                if not oida:
+                    oida = list(recientes)[-6:-1]   # 400 ms antes, para no cortar el "Orión"
+                oida.append(bloque)
+                callado = 0
+            elif oida:
+                oida.append(bloque)
+                callado += 1
+                if callado >= 8 or len(oida) > 75:   # ~0,6 s de silencio, o 6 s seguidos
+                    if len(oida) >= 10 and orden_de_parar(transcribir(_STT[0], np.concatenate(oida))):
+                        cancelar.set()
+                        rep.callar()
+                        parado = True
+                        break
+                    oida, callado = [], 0
+        if INTERRUPCION and (primer_audio or rep.ocupado()):
             nivel = rms(bloque)
             if rep.ocupado() and len(eco) < 6:
                 eco.append(nivel)       # primeros ~0,5 s hablando: aprendo cuánto me oigo a mí mismo
@@ -1369,6 +1546,23 @@ def responder(texto: str, wake) -> list | None:
         info("(atajo: te escucho)" if previo == [] else
              "(me interrumpiste: te escucho)" if previo else "(interrumpido)")
     respuesta = "".join(completo)
+    if parado:
+        # "Orión, para" mientras pensaba: corto el pedido (el cerebro detiene sus herramientas)
+        info("(me pediste parar: corto lo que estaba haciendo)")
+        _IGNORADA[0] = True            # no sigo escuchando sin nombre después de esto
+        historial.pop()
+        poner_estado(pedro="", forzar=True)
+        vaciar_cola()
+        decir("Listo, paré.")
+        return None
+    if _IGNORO.match(respuesta):
+        # el cerebro juzgó que no era para él: no queda en la conversación ni sigo escuchando
+        info("(no era para mí: lo ignoro)")
+        _IGNORADA[0] = True
+        historial.pop()
+        poner_estado(pedro="", forzar=True)
+        vaciar_cola()
+        return None
     poner_estado(pedro=respuesta, forzar=True)
     if respuesta:
         historial.append({"role": "assistant", "content": respuesta})
@@ -1403,7 +1597,9 @@ _NOMBRE = re.compile(r"\b(?:oye|hey|ey|ok|okay|hola)?[\s,]*(?:" + _patron_nombre
 
 _PARAR = re.compile(
     r"^\W*(?:ya\W+)?(para|párale|parale|detente|cállate|callate|silencio|stop|basta|cancela|"
-    r"olvídalo|olvidalo|nada|está bien|esta bien|ya está|ya esta|eso es todo|listo)"
+    r"olvídalo|olvidalo|nada|está bien|esta bien|ya está|ya esta|eso es todo|listo|"
+    r"espera|esp[eé]rate|alto|frena|det[eé]n(?:te)?|no es eso|eso no es|eso no|"
+    r"te equivocaste|entendiste mal|no entendiste)"
     r"(?:\W+(?:gracias|por favor|pedro|ori[oó]n|ya))*\W*$", re.IGNORECASE)
 _DORMIR = re.compile(r"\b(duérmete|duermete|a dormir|modo silencio|en pausa|pausa|pausado|"
                      r"descansa|no escuches|deja de escuchar)\b", re.IGNORECASE)
@@ -1415,7 +1611,26 @@ _PREGUNTA_MIC = re.compile(r"\b(qu[eé]|cu[aá]l)\s+micr[oó]fono|micr[oó]fono\
 
 
 def es_parar(texto: str) -> bool:
-    return bool(_PARAR.match(texto.strip()))
+    """"para", "Orión, para", "no, espera, Orión", "te equivocaste"… (toda la frase es la orden)."""
+    def sin_no(s: str) -> str:
+        return re.sub(r"^\W*no\W+", "", s, flags=re.IGNORECASE)
+
+    for t in dict.fromkeys([texto.strip(), sin_no(texto.strip())]):
+        m = _NOMBRE.match(t)
+        if m:
+            t = t[m.end():]
+        if _PARAR.match(t) or _PARAR.match(sin_no(t)):
+            return True
+    return False
+
+
+def orden_de_parar(texto: str) -> bool:
+    """Mientras pienso solo paro si dices mi nombre (un juego o la TV también dicen "para")."""
+    dijo, _ = buscar_nombre(texto)
+    if dijo and es_parar(texto):
+        info(f"(oí: {texto!r})")
+        return True
+    return False
 
 
 def buscar_nombre(texto: str) -> tuple[bool, str]:
@@ -1557,21 +1772,26 @@ def procesar_eventos(wake) -> None:
             responder(PROMPT_RESUMEN, wake)   # si pulsas el atajo, _ATAJO queda activo y el bucle te escucha
 
 
-def turno(stt, wake, espera: float, texto_previo: str = "") -> bool:
+def turno(stt, wake, espera: float, texto_previo: str = "", directo: bool = True) -> bool:
     """Un turno de conversación. Devuelve True si hubo conversación.
-    Si me interrumpes mientras hablo, sigo escuchándote y respondo a lo que dijiste."""
+    Si me interrumpes mientras hablo, sigo escuchándote y respondo a lo que dijiste.
+    `directo`: me llamaste (nombre, atajo, Enter). Si no (seguimiento o interrupción por voz),
+    lo que oiga pasa por `para_mi` para no responderle al juego o a la TV."""
+    _IGNORADA[0] = False
     previo = None
     if texto_previo:
         print(f"\n  Tú: {texto_previo}", flush=True)
         poner_estado("pensando", usuario=texto_previo)
         previo = responder(texto_previo, wake)
         if previo is None:
-            return True
+            return not _IGNORADA[0]
+        directo = False
     while True:
         if previo == []:                # me callaste con el atajo: escucho desde cero
             _ATAJO.clear()
             beep()
             espera = max(espera, 8)
+            directo = True
         info("🎙️  Te escucho..." if not previo else "🎙️  Te escucho (me interrumpiste)...")
         estado_reposo()
         audio = grabar_frase(espera, previo)
@@ -1588,9 +1808,15 @@ def turno(stt, wake, espera: float, texto_previo: str = "") -> bool:
             info("(ok, me detengo)")
             beep(440, 0.08)
             return False
+        if not directo:
+            texto = para_mi(texto)
+            if texto is None:
+                info("(no parecía para mí: lo ignoro)")
+                return False
         previo = responder(texto, wake)
         if previo is None:
-            return True
+            return not _IGNORADA[0]
+        directo = False
 
 
 VOCES_CANDIDATAS = [
@@ -1683,6 +1909,7 @@ def main() -> None:
         return
 
     print(f"\n  ── {NOMBRE} · voz ──────────────────────────────")
+    unica_instancia()
     if not jarvis_en_linea():
         info(f"⚠️  Jarvis no responde en {API}.")
         sys.exit(1)
@@ -1690,6 +1917,7 @@ def main() -> None:
 
     cargar_historial()
     stt = cargar_stt()
+    _STT[0] = stt
     wake = None
     if not args.teclado and ACTIVACION == "hey":
         from openwakeword.model import Model
@@ -1797,7 +2025,10 @@ def main() -> None:
             # Modo conversación: puedes seguir hablando unos segundos sin "Hey Jarvis"
             while hubo and SEGUIMIENTO > 0:
                 beep(660, 0.08)
-                hubo = turno(stt, wake, espera=SEGUIMIENTO)
+                # si te hice una pregunta ("¿lo subo?"), te doy más tiempo para el "sí"
+                pregunte = bool(historial) and historial[-1].get("role") == "assistant" and \
+                    historial[-1].get("content", "").rstrip().endswith("?")
+                hubo = turno(stt, wake, espera=SEGUIMIENTO * (2.5 if pregunte else 1), directo=False)
             if wake is not None:
                 wake.reset()
             vaciar_cola()
