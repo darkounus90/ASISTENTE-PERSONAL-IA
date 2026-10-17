@@ -683,6 +683,48 @@ def abrir_url(url: str) -> str:
     return f"Abrí {u} en tu navegador."
 
 
+# ---------------------------------------------------------------- abrir archivos y carpetas
+# Solo documentos y carpetas dentro de las carpetas de Andres; nunca programas ni scripts.
+_RAICES_ABRIR = ("/mnt/c/Users/PC", "/mnt/c/dev", "/mnt/c/dev_grafo")
+_EJECUTABLE = re.compile(r"\.(exe|bat|cmd|com|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|msi|msp|lnk|scr|hta|jar|cpl|"
+                         r"reg|pif|application|appref-ms|url|scf|inf|dll|sys|py|pyw|sh)$", re.I)
+
+
+def _a_linux_ruta(ruta: str) -> str:
+    r = (ruta or "").strip().strip('"').strip("'")
+    if r.lower().startswith("file:///"):
+        r = r[8:]
+    r = r.replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/?(.*)$", r)
+    if m:
+        r = f"/mnt/{m.group(1).lower()}/{m.group(2)}"
+    elif r.startswith("~"):
+        r = "/mnt/c/Users/PC" + r[1:]
+    return os.path.realpath(r)
+
+
+def abrir_archivo(ruta: str) -> str:
+    """Abre un documento con su programa predeterminado, o una carpeta en el Explorador."""
+    lin = _a_linux_ruta(ruta)
+    if not any(lin == r or lin.startswith(r + "/") for r in _RAICES_ABRIR):
+        raise ValueError("Solo abro archivos y carpetas dentro de tu usuario (Documentos, Escritorio, "
+                         "Descargas…), C:\\dev o el grafo.")
+    if not os.path.exists(lin):
+        carpeta = os.path.dirname(lin)
+        parecidos = []
+        if os.path.isdir(carpeta):
+            base = os.path.basename(lin).lower()[:6]
+            parecidos = [n for n in os.listdir(carpeta) if base and base in n.lower()][:5]
+        raise ValueError(f"No existe {_a_win(lin)}." + (f" ¿Quizás: {', '.join(parecidos)}?" if parecidos else ""))
+    partes = lin.split("/")
+    if any(p.startswith(".") and p not in (".", "..") for p in partes) or _SECRETO.search(os.path.basename(lin)):
+        raise ValueError("Ese archivo o carpeta es privado o de configuración; no lo abro.")
+    if os.path.isfile(lin) and _EJECUTABLE.search(lin):
+        raise ValueError("Eso es un programa o script; no lo ejecuto. Si quieres verlo, te lo leo.")
+    _lanzar(["explorer.exe", _a_win(lin)])
+    return f"Abrí {_a_win(lin)}" + (" en el Explorador." if os.path.isdir(lin) else " con su programa predeterminado.")
+
+
 # ---------------------------------------------------------------- rutinas
 def _archivo_rutinas() -> str:
     return os.environ.get("PEDRO_RUTINAS", "/mnt/c/Users/PC/Documents/jarvis/rutinas.json")
@@ -952,6 +994,12 @@ HERRAMIENTAS = {
                              "valor": {"type": "number",
                                        "description": "Porcentaje (volumen) o minutos (apagar_en)"}},
                             ["accion"])}),
+    "abrir_archivo": (abrir_archivo, {
+        "description": "Abre un documento (md, pdf, docx, xlsx, imagen, txt…) con su programa predeterminado, o "
+                       "una carpeta en el Explorador, para que Andres lo vea. Úsala para 'abre el archivo', "
+                       "'ábreme la carpeta', 'muéstrame el informe'. Rutas de Windows (C:\\Users\\PC\\Documents\\x.md). "
+                       "No abre programas ni scripts. No requiere confirmación.",
+        "inputSchema": _obj({"ruta": {"type": "string", "description": "Ruta del archivo o carpeta"}}, ["ruta"])}),
     "abrir_url": (abrir_url, {
         "description": "Abre una página web (solo https) en el navegador predeterminado de Andres para que "
                        "él la vea. No devuelve el contenido. Úsala para 'ábreme Vercel', 'abre el panel "

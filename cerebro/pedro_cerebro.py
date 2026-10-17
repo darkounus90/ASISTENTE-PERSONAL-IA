@@ -51,6 +51,7 @@ GRAFO = os.environ.get("PEDRO_GRAFO", r"C:\dev_grafo")
 MCP_MODO = os.environ.get("PEDRO_MCP", "wsl")          # wsl | local (pruebas en Linux)
 DISTRO = os.environ.get("PEDRO_WSL_DISTRO", "Ubuntu")
 PENSAR = os.environ.get("PEDRO_PENSAR", "0") == "1"   # 1 = razonamiento extendido (más lento)
+CONTEXTO_MAX = int(os.environ.get("PEDRO_CONTEXTO_MAX", "60000"))   # tokens: más = más caro cada pregunta
 ESPERA_MAX = float(os.environ.get("PEDRO_ESPERA_MAX", "90"))   # seg. sin noticias del modelo
 SESION_HORAS = float(os.environ.get("JARVIS_HISTORIAL_HORAS", "8"))
 try:
@@ -219,6 +220,24 @@ def error_amigable(texto: str) -> str | None:
     return "Nyxos me devolvió un error y no pude responder. Inténtalo de nuevo."
 
 
+# Voseo -> tuteo para respuestas escritas (WhatsApp). La voz lo corrige en voz.py al hablar.
+_VOSEO = {"podés": "puedes", "querés": "quieres", "tenés": "tienes", "sabés": "sabes", "decís": "dices",
+          "hacés": "haces", "sos": "eres", "necesitás": "necesitas", "preferís": "prefieres", "pensás": "piensas",
+          "creés": "crees", "venís": "vienes", "seguís": "sigues", "entendés": "entiendes", "mirá": "mira",
+          "fijate": "fíjate", "decime": "dime", "contame": "cuéntame", "avisame": "avísame", "arrancá": "arranca",
+          "hacelo": "hazlo", "decí": "di", "andá": "ve", "vení": "ven", "tomá": "toma", "probá": "prueba",
+          "dejá": "deja", "pasame": "pásame", "esperá": "espera", "elegí": "elige", "usá": "usa", "revisá": "revisa",
+          "pedile": "pídele", "decile": "dile", "mandame": "mándame", "escribime": "escríbeme", "vos": "tú"}
+_VOSEO_RX = re.compile(r"\b(" + "|".join(sorted(_VOSEO, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+
+
+def tutear(txt: str) -> str:
+    def cambio(m):
+        nuevo = _VOSEO[m.group(1).lower()]
+        return nuevo[0].upper() + nuevo[1:] if m.group(1)[0].isupper() else nuevo
+    return _VOSEO_RX.sub(cambio, txt or "")
+
+
 def ahora_legible() -> str:
     dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
@@ -238,6 +257,10 @@ class Cerebro:
         self.sesion_id: str | None = None
         self.lock = asyncio.Lock()
         self.ultima: dict = {}
+        self.costo_sesion = 0.0          # el motor reporta el costo ACUMULADO de la sesión
+        self.contexto = 0                # tokens que se reenvían en cada pregunta
+        self.rotar = False
+        self.recientes: list[tuple[str, str]] = []
 
     # --- sesión -------------------------------------------------------
     def _archivo_sesion(self) -> Path:
@@ -333,6 +356,8 @@ class Cerebro:
                      f"lista en {time.time() - t:.1f}s")
                 if not intento:
                     self.sesion_id = None
+                self.costo_sesion = 0.0
+                self.contexto = 0
                 return
             except Exception as e:  # noqa: BLE001
                 info(f"no pude {'retomar la sesión' if intento else 'iniciar Claude Code'}: {e!r}")
@@ -380,14 +405,26 @@ class Cerebro:
             self.ultima = {"texto": texto, "respuesta": "", "herramientas": [], "error": None}
             terminado = False
             try:
+                resumen = ""
+                if self.rotar and not nueva:
+                    # la conversación creció mucho (cada pregunta reenvía todo y cuesta más):
+                    # empiezo una nueva y le paso un resumen corto de lo último para no perder el hilo
+                    nueva, self.rotar = True, False
+                    resumen = self._resumen()
+                    info(f"conversación renovada (contexto {self.contexto} tokens > {CONTEXTO_MAX}); llevo lo último")
                 if self.cliente is None or nueva:
                     await self._conectar(nueva=nueva)
                 self.pol.nuevo_turno(texto, prueba=self.prueba)
-                await self.cliente.query(f"{texto}\n\n(hora local: {ahora_legible()})")
+                consulta = f"{texto}\n\n(hora local: {ahora_legible()})"
+                if resumen:
+                    consulta = (f"(Contexto: seguimos la misma charla; lo último que hablamos fue:\n{resumen}\n"
+                                "No lo repitas, solo úsalo para entender.)\n\n" + consulta)
+                await self.cliente.query(consulta)
                 emitido_en_mensaje = 0
                 hubo_texto = False
                 primera = None
                 t_consulta = 0.0
+                contexto_turno = 0
                 flujo = self.cliente.receive_response().__aiter__()
                 while True:
                     try:
@@ -405,7 +442,7 @@ class Cerebro:
                         if msg.subtype == "status" and (msg.data or {}).get("status") == "requesting":
                             t_consulta = time.time()
                             continue
-                        if msg.subtype not in ("init",):
+                        if msg.subtype not in ("init", "thinking_tokens"):
                             info(f"  [sistema] {msg.subtype}: {json.dumps(msg.data, ensure_ascii=False, default=str)[:400]}")
                         continue
                     if isinstance(msg, StreamEvent):
@@ -431,6 +468,11 @@ class Cerebro:
                     elif isinstance(msg, AssistantMessage):
                         if msg.parent_tool_use_id:
                             continue
+                        uso = getattr(msg, "usage", None) or {}
+                        if uso:
+                            contexto_turno = max(contexto_turno, int(uso.get("input_tokens", 0)) +
+                                                 int(uso.get("cache_read_input_tokens", 0)) +
+                                                 int(uso.get("cache_creation_input_tokens", 0)))
                         if getattr(msg, "error", None):
                             self.ultima["error"] = str(msg.error)
                             info(f"  [api] error del modelo: {msg.error}")
@@ -468,7 +510,11 @@ class Cerebro:
                             self.ultima["error"] = detalle
                             await cola.put(error_amigable(str(detalle)) or
                                            f"Tuve un problema con mi cerebro: {str(detalle)[:160]}")
-                        self.ultima["costo_usd"] = msg.total_cost_usd
+                        if msg.total_cost_usd is not None:
+                            total = float(msg.total_cost_usd)
+                            self.ultima["costo_usd"] = max(0.0, total - self.costo_sesion)
+                            self.ultima["costo_sesion"] = total
+                            self.costo_sesion = total
                         u = msg.usage or {}
                         if u:
                             info(f"  tokens: entrada {u.get('input_tokens', 0)} · caché leída "
@@ -477,8 +523,13 @@ class Cerebro:
                 terminado = not str(self.ultima.get("error") or "").startswith("sin respuesta")
                 self.ultima["tiempos"] = {"primera_palabra": round(primera or 0, 2),
                                           "total": round(time.time() - t0, 2)}
-                if self.ultima.get("costo_usd"):
-                    info(f"  costo del turno: ${self.ultima['costo_usd']:.4f} USD")
+                self.contexto = contexto_turno or self.contexto
+                if self.ultima.get("costo_sesion") is not None:
+                    info(f"  costo del turno: ${self.ultima.get('costo_usd', 0):.4f} USD · sesión: "
+                         f"${self.ultima['costo_sesion']:.2f} · contexto: {self.contexto} tokens")
+                self.recientes = (self.recientes + [(texto, self.ultima.get("respuesta", ""))])[-6:]
+                if self.contexto > CONTEXTO_MAX and not self.prueba:
+                    self.rotar = True
                 info(f"{'[prueba] ' if self.prueba else ''}turno listo en {time.time() - t0:.1f}s "
                      f"(1a palabra {primera or 0:.1f}s) · herramientas: "
                      f"{', '.join(h['nombre'] for h in self.ultima['herramientas']) or 'ninguna'}")
@@ -495,6 +546,14 @@ class Cerebro:
                 if not terminado and self.cliente is not None and not str(self.ultima.get("error") or "").startswith("sin respuesta"):
                     await self._interrumpir()
                 await cola.put(None)
+
+    def _resumen(self) -> str:
+        lineas = []
+        for pregunta, respuesta in self.recientes[-5:]:
+            p = re.sub(r"^\s*(\[[^\]]*\]\s*)+", "", pregunta).strip()[:220]
+            r = " ".join((respuesta or "").split())[:320]
+            lineas.append(f"- Andres: {p}\n  Tú: {r}")
+        return "\n".join(lineas)
 
     async def _interrumpir(self) -> None:
         try:
@@ -550,7 +609,7 @@ def crear_app():
             await tarea
             return web.json_response({"id": cid, "object": "chat.completion", "model": MODELO,
                                       "choices": [{"index": 0, "finish_reason": "stop",
-                                                   "message": {"role": "assistant", "content": "".join(partes)}}]})
+                                                   "message": {"role": "assistant", "content": tutear("".join(partes))}}]})
 
         resp = web.StreamResponse(headers={"Content-Type": "text/event-stream; charset=utf-8",
                                            "Cache-Control": "no-cache"})

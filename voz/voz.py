@@ -1138,10 +1138,16 @@ def para_mi(texto: str) -> str | None:
         return resto or None
     if len(texto.split()) < 2 and not _CORTA.match(texto):
         return None
-    if _CONFIANZA[0] < CONFIANZA_MIN:
+    if _CONFIANZA[0] < CONFIANZA_MIN and not (_CORTA.match(texto) and _pregunte()):
         info(f"(transcripción dudosa {_CONFIANZA[0]:.2f}: parece ruido de fondo)")
         return None
     return f"[voz][sin nombre] {texto}"
+
+
+def _pregunte() -> bool:
+    """¿Mi última respuesta terminó en pregunta? (entonces un "sí" corto es la respuesta, no ruido)"""
+    return bool(historial) and historial[-1].get("role") == "assistant" and \
+        historial[-1].get("content", "").rstrip().endswith("?")
 
 
 # ----------------------------------------------------------------- Hablar (voz neural)
@@ -1166,8 +1172,37 @@ def _hora(m: re.Match) -> str:
     return f"{h12}{minutos}{momento}"
 
 
+# Voseo -> tuteo (Andres habla de tú). Solo formas inequívocas de vos; nada que choque con otras palabras.
+_VOSEO = {
+    "podés": "puedes", "querés": "quieres", "tenés": "tienes", "sabés": "sabes", "decís": "dices",
+    "hacés": "haces", "sos": "eres", "necesitás": "necesitas", "preferís": "prefieres", "pensás": "piensas",
+    "creés": "crees", "venís": "vienes", "seguís": "sigues", "ves": "ves", "entendés": "entiendes",
+    "querías": "querías", "estás": "estás", "mirá": "mira", "fijate": "fíjate", "decime": "dime",
+    "contame": "cuéntame", "avisame": "avísame", "arrancá": "arranca", "hacelo": "hazlo", "decí": "di",
+    "andá": "ve", "vení": "ven", "tomá": "toma", "probá": "prueba", "dejá": "deja", "pasame": "pásame",
+    "esperá": "espera", "pensalo": "piénsalo", "elegí": "elige", "usá": "usa", "llamá": "llama",
+    "escribime": "escríbeme", "mandame": "mándame", "pedile": "pídele", "decile": "dile", "fijá": "fija",
+    "probalo": "pruébalo", "revisá": "revisa", "acordate": "acuérdate", "quedate": "quédate", "vos": "tú",
+}
+_VOSEO_RX = re.compile(r"\b(" + "|".join(sorted((k for k, v in _VOSEO.items() if k != v), key=len, reverse=True)) + r")\b",
+                       re.IGNORECASE)
+
+
+def tutear(txt: str) -> str:
+    def cambio(m: re.Match) -> str:
+        nuevo = _VOSEO[m.group(1).lower()]
+        return nuevo[0].upper() + nuevo[1:] if m.group(1)[0].isupper() else nuevo
+    return _VOSEO_RX.sub(cambio, txt or "")
+
+
+_LINEA_FUENTE = re.compile(r"^\s*(\*\*)?(sources|fuentes|referencias)(\*\*)?\s*:?\s*(\*\*)?\s*$|"
+                           r"^\s*[-*•]?\s*\[[^\]]+\]\([^)]+\)\s*\.?\s*$", re.IGNORECASE | re.MULTILINE)
+
+
 def limpiar_para_voz(txt: str) -> str:
     """Deja el texto como lo diría una persona: sin markdown, emojis ni símbolos."""
+    txt = _LINEA_FUENTE.sub("", txt)                                # la lista de fuentes no se lee en voz alta
+    txt = tutear(txt)
     txt = re.sub(r"```.*?```", " (te dejé código en pantalla) ", txt, flags=re.S)
     txt = re.sub(r"`([^`]*)`", r"\1", txt)
     txt = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", txt)

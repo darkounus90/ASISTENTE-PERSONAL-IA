@@ -20,7 +20,7 @@ import shlex
 from collections import Counter
 from dataclasses import dataclass, field
 
-LIBRE, CONFIRMAR, PROHIBIDO, SERVIDOR = "libre", "confirmar", "prohibido", "servidor"
+LIBRE, CONFIRMAR, PROHIBIDO, SERVIDOR, REDIRIGIR = "libre", "confirmar", "prohibido", "servidor", "redirigir"
 
 # ------------------------------------------------------------------ secretos
 _SECRETO_NOMBRE = (r"\.env(?![\w.-]*\.(example|sample|template)\b)(\.[\w.-]+)?\b|\.e(nv?)?[*?\[]|secrets?\.env|google_pedro|"
@@ -42,6 +42,8 @@ _B_PROHIBIDO = re.compile(
     r"process\.env|os\.environ|\$env:|get-childitem\s+env:|\bgci\s+env:|\bdir\s+env:|\bls\s+env:|"
     r"^\s*set\s*$|\$\{?[a-z_]*(key|token|secret|passw|pwd|auth)[a-z_]*\}?", re.I)
 
+_B_ABRIR = re.compile(r"^\s*(explorer(\.exe)?\s+|start\s+(\"\"\s+)?|cmd(\.exe)?\s+/c\s+(start\s+(\"\"\s+)?)?|"
+                      r"invoke-item\s+|ii\s+|xdg-open\s+|open\s+)[\"']?[a-z]:[\\/][^&|;<>`$]*$", re.I)
 _B_SERVIDOR = re.compile(
     r"\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|watch|preview)\b|\bnext\s+(dev|start)\b|"
     r"\bvite(\s|$)|\bnodemon\b|\bnest\s+start\b|\btsx\s+watch\b|\bnpx\s+(serve|http-server)\b|"
@@ -128,7 +130,7 @@ _LECTURA = {
 _LIBRE_MCP = _LECTURA | {
     "abrir_proyecto", "abrir_app", "abrir_claude_code", "abrir_terminal", "crear_recordatorio",
     "borrar_recordatorio", "cancelar_tarea", "crear_nota", "agregar_a_nota", "abrir_en_comet",
-    "abrir_comet_pedro", "abrir_url", "rutina", "vigilar_sitio", "browser_navigate", "browser_navigate_back", "browser_hover",
+    "abrir_comet_pedro", "abrir_archivo", "abrir_url", "rutina", "vigilar_sitio", "browser_navigate", "browser_navigate_back", "browser_hover",
     "browser_press_key", "browser_resize", "browser_close",
 }
 _CONFIRMAR_MCP = {"crear_evento", "lanzar_claude_code", "dejar_de_vigilar"}
@@ -179,6 +181,21 @@ def _norm_ruta(ruta: str) -> str:
     return r.rstrip(" .\\")                                            # Windows ignora espacios/puntos finales
 
 
+_DOC_PERSONAL = re.compile(
+    r"^c:\\users\\[^\\]+\\(documents|documentos|desktop|escritorio|downloads|descargas|onedrive[^\\]*)\\"
+    r"(?!.*\\(\.git|node_modules)\\)[^:*?\"<>|]*\.(md|txt|csv|json|html?|xml|ya?ml|log)$", re.I)
+
+
+def _existe(ruta_win: str) -> bool:
+    """¿Ya existe el archivo? (en Windows directo; en pruebas desde Linux, vía /mnt/c)."""
+    import os
+    candidatos = [ruta_win]
+    m = re.match(r"^([a-z]):\\(.*)$", ruta_win, re.I)
+    if m:
+        candidatos.append(f"/mnt/{m.group(1).lower()}/" + m.group(2).replace("\\", "/"))
+    return any(os.path.exists(c) for c in candidatos)
+
+
 def clasificar(herramienta: str, entrada: dict, texto_turno: str = "") -> tuple[str, str]:
     """Devuelve (categoría, motivo)."""
     nombre = _base(herramienta)
@@ -189,6 +206,8 @@ def clasificar(herramienta: str, entrada: dict, texto_turno: str = "") -> tuple[
             return PROHIBIDO, "comando destructivo o que expone secretos"
         if entrada.get("run_in_background") or _B_SERVIDOR.search(cmd):
             return SERVIDOR, "servidor o proceso largo"
+        if _B_ABRIR.match(cmd):
+            return REDIRIGIR, "abrir un archivo o carpeta"
         if _bash_seguro(cmd):
             return LIBRE, ""
         return CONFIRMAR, f"correr el comando «{cmd[:140]}»"
@@ -204,6 +223,8 @@ def clasificar(herramienta: str, entrada: dict, texto_turno: str = "") -> tuple[
             return PROHIBIDO, "archivo de secretos"
         if ruta.endswith("\\documents\\jarvis\\memory.md"):
             return LIBRE, ""
+        if nombre == "Write" and _DOC_PERSONAL.match(ruta) and not _existe(ruta):
+            return LIBRE, ""          # crear un documento nuevo (informe, notas…) no cambia nada existente
         return CONFIRMAR, f"editar el archivo {ruta[-80:]}"
     if nombre == "escribir_en_terminal":
         ventana = str(entrada.get("ventana", "")).strip()
@@ -267,11 +288,22 @@ class Politica:
     aprobados: Counter = field(default_factory=Counter)
     traza: list = field(default_factory=list)
     texto: str = ""
+    edades: dict = field(default_factory=dict)     # clave -> (turnos que lleva pendiente, cuándo se pidió)
 
     def nuevo_turno(self, texto: str, prueba: bool = False) -> None:
-        """Un "sí" claro de Andres aprueba UNA vez cada acción que quedó pendiente en el turno anterior."""
-        self.aprobados = Counter(self.pendientes) if es_afirmativo(texto) else Counter()
-        self.pendientes = Counter()
+        """Un "sí" claro de Andres aprueba UNA vez cada acción que quedó pendiente. Lo pendiente
+        sobrevive hasta 3 turnos (10 min): si en medio él pregunta algo, su "sí" igual vale."""
+        import time as _t
+        ahora = _t.time()
+        edades = self.edades
+        vigentes = Counter({k: n for k, n in self.pendientes.items()
+                            if edades.get(k, (0, ahora))[0] < 3 and ahora - edades.get(k, (0, ahora))[1] < 600})
+        if es_afirmativo(texto):
+            self.aprobados, self.pendientes, self.edades = vigentes, Counter(), {}
+        else:
+            self.aprobados = Counter()
+            self.pendientes = vigentes
+            self.edades = {k: (edades.get(k, (0, ahora))[0] + 1, edades.get(k, (0, ahora))[1]) for k in vigentes}
         self.prueba = prueba
         self.texto = texto or ""
         self.traza = []
@@ -285,6 +317,10 @@ class Politica:
             self.traza.append({"herramienta": nombre, "entrada": resumen, "decision": "prohibido"})
             return False, (f"BLOQUEADO por seguridad ({motivo}). No lo intentes de otra forma. "
                            "Dile a Andres en una frase que eso no lo haces y, si aplica, que lo haga él.")
+        if cat == REDIRIGIR:
+            self.traza.append({"herramienta": nombre, "entrada": resumen, "decision": "redirigido"})
+            return False, ("Para abrir archivos o carpetas usa la herramienta abrir_archivo(ruta): no necesita "
+                           "permiso de Andres. Hazlo ya, sin preguntarle.")
         if cat == SERVIDOR:
             self.traza.append({"herramienta": nombre, "entrada": resumen, "decision": "servidor"})
             return False, ("No corras servidores ni procesos largos con Bash: se quedan colgados. Usa "
@@ -294,9 +330,11 @@ class Politica:
             if self.aprobados[clave] > 0:
                 self.aprobados[clave] -= 1
             else:
-                self.pendientes[clave] += 1
+                import time as _t
+                self.edades.setdefault(clave, (0, _t.time()))
+                self.pendientes[clave] = 1
                 self.traza.append({"herramienta": nombre, "entrada": resumen, "decision": "pedir_si"})
-                return False, (f"NECESITA EL SÍ DE ANDRES: vas a {motivo}. No lo ejecutes todavía. "
+                return False, (f"NECESITA EL SÍ DE ANDRES: vas a {motivo}. NO SE EJECUTÓ: no digas que lo hiciste. "
                                "Pregúntale en UNA frase qué vas a hacer exactamente y termina tu respuesta "
                                "ahí. Cuando él diga que sí, vuelve a ejecutarlo EXACTAMENTE igual (mismo "
                                "comando o mismos datos); si cambias algo, tendrás que preguntar de nuevo.")
@@ -379,6 +417,15 @@ if __name__ == "__main__":
         ("mcp__comet-control__browser_click", {"element": "enlace Servicios"}, LIBRE),
         ("mcp__grafo__crear_nota", {"titulo": "x"}, LIBRE), ("mcp__vision__ver_pantalla", {}, LIBRE),
         ("mcp__otro__algo_raro", {}, CONFIRMAR),
+        ("mcp__pc__abrir_archivo", {"ruta": "C:\\Users\\PC\\Documents\\x.md"}, LIBRE),
+        (*B("explorer.exe \"C:\\Users\\PC\\Documents\\jarvis\""), REDIRIGIR),
+        (*B("start \"\" \"C:\\Users\\PC\\Documents\\CRM.md\""), REDIRIGIR),
+        (*B("cmd.exe /c \"C:\\Users\\PC\\Documents\\CRM.md\""), REDIRIGIR),
+        ("Write", {"file_path": "C:\\Users\\PC\\Documents\\Informe_nuevo_qa_123.md"}, LIBRE),
+        ("Write", {"file_path": "C:\\Users\\PC\\Desktop\\notas_qa_123.txt"}, LIBRE),
+        ("Write", {"file_path": "C:\\Users\\PC\\Documents\\jarvis\\voz\\voz.py"}, CONFIRMAR),
+        ("Write", {"file_path": "C:\\dev\\x\\README.md"}, CONFIRMAR),
+        ("Write", {"file_path": "C:\\Users\\PC\\Documents\\.env.md"}, PROHIBIDO),
         ("mcp__pc__control_pc", {"accion": "volumen", "valor": 30}, LIBRE),
         ("mcp__pc__control_pc", {"accion": "apagar_en", "valor": 10}, CONFIRMAR),
         ("mcp__pc__rutina", {"nombre": "trabajo"}, LIBRE), ("mcp__pc__listar_rutinas", {}, LIBRE),
@@ -413,6 +460,17 @@ if __name__ == "__main__":
     assert p.decidir("Bash", {"command": "rm -r node_modules"})[0] is False, "un sí no aprueba OTRA acción"
     assert p.decidir("Bash", {"command": "git commit -m a"})[0] is True
     assert p.decidir("Bash", {"command": "git commit -m a"})[0] is False, "solo una vez"
+    p.nuevo_turno("[voz] haz commit")
+    assert p.decidir("Bash", {"command": "git commit -m z"})[0] is False
+    p.nuevo_turno("[voz] ¿ya lo hiciste?")                                   # pregunta en medio
+    p.nuevo_turno("[voz] Sí, escríbelo")
+    assert p.decidir("Bash", {"command": "git commit -m z"})[0] is True, "el sí vale tras una pregunta"
+    p.nuevo_turno("[voz] haz commit")
+    p.decidir("Bash", {"command": "git commit -m w"})
+    for _ in range(4):
+        p.nuevo_turno("[voz] otra cosa")
+    p.nuevo_turno("[voz] sí")
+    assert p.decidir("Bash", {"command": "git commit -m w"})[0] is False, "lo pendiente caduca a los 3 turnos"
     p.nuevo_turno("[voz] Va a llover hoy")
     assert p.decidir("Bash", {"command": "git commit -m a"})[0] is False, "sin sí claro sigue bloqueado"
     p.nuevo_turno("[voz] ok", prueba=True)
